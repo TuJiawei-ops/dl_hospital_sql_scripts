@@ -9,6 +9,9 @@
 --           显式承载一次分配命脉列 PROJ_CODE / PROJ_NAME / ITEM_CAT_CODE / ITEM_CAT_NAME；
 --           原表 DWD_FIN_CALC_DETAIL_LOG 退守二次分配（核算单元 × 员工 × 岗位）粒度。
 -- 修改日志：
+-- 2026-09-12 22:50:00 | 字段扩展 | 新增 [TOTAL_QTY] DECIMAL(18,8) NULL 物理列（汇总工作量/数量·工分制第一性核对列）：将"工作量/工分"一等公民化，
+--                                      使前端与 BI 无需解析 CALC_DETAIL_JSON 即可直接 SUM(TOTAL_QTY) 完成 工作量 × 点值 业务对账；
+--                                      同步追加对应字段级扩展属性注释，JSON 过程仓继续承载全量计算链路上下文（列化核对 + JSON 穿透双轨并存）。
 -- 2026-09-12 22:10:00 | 架构解耦 | 创建一次分配专用物理表 DDL：剥离人员/岗位杂质列，显式露出 PROJ_CODE/PROJ_NAME/ITEM_CAT_CODE/ITEM_CAT_NAME 项目维度；
 --                                      唯一键绑定 (CALC_YEAR, CALC_MONTH, ITEM_CODE, UNIT_CODE, PROJ_CODE)；新增 FINAL_VALUE_TYPE 值类型标识列（SCORE/AMOUNT/INDEX）防口径歧义；
 --                                      纠偏草稿 GO 批处理违规为单批分号执行；索引创建增加幂等守卫；
@@ -40,6 +43,7 @@ CREATE TABLE [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
     [FINAL_VALUE_TYPE]      NVARCHAR(20)        NOT NULL
         CONSTRAINT [DF_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_VALUE_TYPE] DEFAULT (N'SCORE'), -- 最终值口径：SCORE 积分 / AMOUNT 金额 / INDEX 指数
     [FINAL_VALUE]           DECIMAL(18,8)       NOT NULL,   -- 最终项目积分/分配金额（result_value 语义）
+    [TOTAL_QTY]             DECIMAL(18,8)       NULL,       -- 汇总工作量/数量（工分制第一性核对列）
     [CALC_PROCESS_TEXT]     NVARCHAR(MAX)       NULL,       -- 计算过程描述（三段式/四段式审计文本）
     -- ===== JSON 过程仓（单项RVU、决策系数、原始数量、费别等全量打包）=====
     [CALC_DETAIL_JSON]      NVARCHAR(MAX)       NULL,       -- FOR JSON PATH 序列化全量过程因子
@@ -118,6 +122,9 @@ EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'最终值口�
 
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'最终项目积分或分配金额（最终结算结果，result_value 语义）',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_ALLOC1_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'FINAL_VALUE';
+
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'汇总工作量/数量（工分制第一性核对列，前端与 BI 可直接 SUM 做业务对账，无需解析 JSON）',
+    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_ALLOC1_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'TOTAL_QTY';
 
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'计算过程人类可读描述文本（审计穿透与前端明细弹窗）',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_ALLOC1_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'CALC_PROCESS_TEXT';
