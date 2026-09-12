@@ -1,9 +1,10 @@
 /* ===============================================================================
   脚本名称: 医疗服务项目开单积分.sql
-  业务说明: 医疗服务项目开单决策积分汇总（按 项目 × 开单科室 粒度）
+  业务说明: 医疗服务项目开单决策积分汇总（按 核算单元 × 项目代码 粒度）
             积分 = SUM(数量) × RVU_VAL(单项绩效点数) × DECISION_COFF(诊疗决策系数)
             剔除绩效大类: 1101(出入院服务类)、1041(诊察类)
   数据流向: dbo.[PF临时医疗服务项目26A] (事实层)
+            LEFT JOIN dbo.[sjjk_DEPT_UNIT_MAPPING_2025_11_27] (拉链维表, 核算单元归属)
             INNER JOIN dbo.[DIM_PRF_ITEM_RVU_VERSION] (维度层, 版本号显式路由)
             => 一次分配 · 医疗服务项目开单积分
 
@@ -28,8 +29,14 @@
      直连将全量失配。故在 fact_raw_keyed 层统一归一为 RIGHT('0' + CAST(DEPT_CODE AS VARCHAR(20)), 4) 后再关联。
   5. 维表对同一 (HIS_DEPT_CODE, START_DATE, END_DATE) 存在重复行（0433/11941/11944/11961），
      且同一 HIS 科室 1:N 映射至多核算单元，按 PARTITION BY (HIS_DEPT_CODE, START_DATE, END_DATE) 取 ID 最大行防膨胀。
+  6. 【落库粒度锁死】DWD 层存储粒度必须与落库主键 UNIT_CODE 物理对齐，落库前按
+     [核算单元编码 × 项目代码] 完成预汇总；原开单科室维度的打散明细下沉至 CALC_DETAIL_JSON.SRC_DEPT_MAPPING 仓内存储。
+     尤其禁止将 RVU_VAL / DECISION_COFF 放入 GROUP BY，否则同一核算单元将被多版本维度二次打散，UNIT_CODE 冗余无法根除。
+  7. 维度系数（RVU_VAL / DECISION_COFF）在 agg_coff_collapse 层按 PROJ_CODE 先行收敛唯一值，
+     并以 DISTINCT_RVU_CNT / DISTINCT_COFF_CNT 做一致性哨兵；若 > 1 说明维度口径存在歧义，须回溯 DIM_PRF_ITEM_RVU_VERSION。
 
   修改日志：
+  2026-09-12 20:10:00 | 粒度纠偏 | 依据 EAV-Hybrid 规范将落库粒度由 [项目 × 开单科室] 上提为 [核算单元编码 × 项目代码]，彻底消除同一 UNIT_CODE 下多条 DWD 记录冗余：新增 agg_coff_collapse 层按 PROJ_CODE 收敛维度系数唯一值（含 DISTINCT_RVU_CNT/DISTINCT_COFF_CNT 一致性哨兵），agg 层 GROUP BY 严格锁死 [UNIT_CODE × PROJ_CODE] 并将 RVU_VAL/DECISION_COFF 移出聚合键；原开单科室打散明细经 FOR XML PATH 序列化为 SRC_DEPT_MAPPING_JSON 下沉至 CALC_DETAIL_JSON 仓内存储（含 SRC_DEPT_CNT 计数）；final 层新增 UNIT_CODE/UNIT_NAME 口径并补齐四段式审计文本第四段【纯数字结算算式段】；修复既有 INSERT 语句中孤立 SELECT 导致的语法破损与 STAFF_CODE/POST_CODE 违反 NOT NULL 唯一键约束问题，改为标准 INSERT INTO ... SELECT FROM final ... WHERE UNIT_CODE IN {struct_codes} 单语句落库；新增 agg_audit 层作为 (UNIT_CODE, PROJ_CODE) 唯一性断言入口。第二区块 {struct_code/struct_name/result_value} 接口契约与 ~ 隔离标记零改动。
   2026-09-12 19:10:00 | 持久化重构 | 依据 EAV-Hybrid + Envelope 规范将脚本重构为双区块架构（波浪号隔离）：第一区块新增按 (CALC_YEAR, CALC_MONTH, ITEM_CODE, UNIT_CODE) 的 DELETE 幂等清理并将最终 CTE 结果 INSERT 落库至 DWD_FIN_CALC_DETAIL_LOG（UNIT_CODE 取核算单元编码兜底开单科室代码，STAFF/POST 填充 'N/A'，FINAL_VALUE=开单决策积分，全量中间因子 FOR JSON PATH 收敛至 CALC_DETAIL_JSON）；第二区块新增最外层接口读取块（struct_code/struct_name/result_value 契约）。底层开单积分计算与维度收敛逻辑零改动。
   2026-09-12 18:30:00 | 维度扩展 | 引入 sjjk_DEPT_UNIT_MAPPING_2025_11_27 拉链映射表（限定 PERFORM_PERSON_TYPE_CODE='1001' 且基于开单时间半开区间匹配），扩展绩效核算单元编码、名称及映射行快照 JSON；纠偏关联键编码口径（事实层数值补零归一至维表旧版字符编码），纠偏同键重复行导致的行级膨胀。
   2026-09-12 18:00:00 | 字段扩展 | 新增核算年份与月份字段；新增符合四段式规范的计算过程描述字段；最外层别名统一转换为中文。
@@ -42,10 +49,9 @@
   '{year}'      : 核算年份, 4 位数字文本, 默认 '2025'
   '{month}'     : 核算月份, 1-12 文本, 默认 '6'
   {struct_codes}: 科室代码过滤集, 英文逗号分隔; 留空则不过滤
-  输出契约   : 核算年份 / 核算月份 / 项目代码 / 项目名称 / 开单科室代码 / 开单科室名称
-               / 核算单元编码 / 核算单元名称 / 核算单元映射关系
-               / 绩效核算大类代码 / 绩效核算大类名称 / 单项RVU点数 / 诊疗决策系数
-               / 汇总数量 / 开单决策积分 / 计算过程描述
+  输出契约   : 核算年份 / 核算月份 / 核算单元编码 / 核算单元名称
+               / 项目代码 / 项目名称 / 绩效核算大类代码 / 绩效核算大类名称
+               / 单项RVU点数 / 诊疗决策系数 / 汇总数量 / 开单决策积分 / 计算过程描述
    ── 持久化契约（EAV-Hybrid Envelope） ──
    日志表 : dbo.[DWD_FIN_CALC_DETAIL_LOG]
             ITEM_CODE / ITEM_NAME  : ITEM_MEDICAL_SERVICE_ORDER_SCORE / 医疗服务项目开单积分
@@ -53,28 +59,11 @@
             UNIT_CODE / UNIT_NAME  : 核算单元编码（兜底开单科室代码） / 核算单元名称（兜底开单科室名称）
             STAFF_CODE / STAFF_NAME/ POST_CODE / POST_NAME : 'N/A'（科室级核算项）
             FINAL_VALUE            : 开单决策积分（DECIMAL(18,8)）
-            CALC_DETAIL_JSON       : 项目/开单科室/核算单元/大类/单项RVU/决策系数/汇总数量/开单决策积分 全量收敛
-   架构   : 双区块（第一区块 DELETE 幂等清理 + CTE 计算 + INSERT 落库 ~ 第二区块最外层接口读取）
+            CALC_DETAIL_JSON       : 核算单元/项目/大类/单项RVU/决策系数/汇总数量/开单决策积分
+                                     以及原开单科室打散明细 SRC_DEPT_MAPPING 全量收敛
+   粒度   : [核算单元编码 × 项目代码] —— 与落库主键 UNIT_CODE 物理对齐，同账期同核算项下 UNIT_CODE 唯一
+   架构   : 双区块（第一区块 DELETE 幂等清理 + CTE 计算 + INSERT 落库 · 第二区块最外层接口读取）
    =============================================================================== */
-   日志表 : dbo.[DWD_FIN_CALC_DETAIL_LOG]
-            ITEM_CODE / ITEM_NAME  : ITEM_MEDICAL_SERVICE_ORDER_SCORE / 医疗服务项目开单积分
-            SCRIPT_NAME            : 医疗服务项目开单积分.sql
-            UNIT_CODE / UNIT_NAME  : 核算单元编码（兜底开单科室代码） / 核算单元名称（兜底开单科室名称）
-            STAFF_CODE / STAFF_NAME/ POST_CODE / POST_NAME : 'N/A'（科室级核算项）
-            FINAL_VALUE            : 开单决策积分（DECIMAL(18,8)）
-            CALC_DETAIL_JSON       : 项目/开单科室/核算单元/大类/单项RVU/决策系数/汇总数量/开单决策积分 全量收敛
-   架构   : 双区块（第一区块 DELETE 幂等清理 + CTE 计算 + INSERT 落库 ~ 第二区块最外层接口读取）
-   =============================================================================== */
-
-   日志表 : dbo.[DWD_FIN_CALC_DETAIL_LOG]
-            ITEM_CODE / ITEM_NAME  : ITEM_MEDICAL_SERVICE_ORDER_SCORE / 医疗服务项目开单积分
-            SCRIPT_NAME            : 医疗服务项目开单积分.sql
-            UNIT_CODE / UNIT_NAME  : 核算单元编码（兜底开单科室代码） / 核算单元名称（兜底开单科室名称）
-            STAFF_CODE / STAFF_NAME/ POST_CODE / POST_NAME : 'N/A'（科室级核算项）
-            FINAL_VALUE            : 开单决策积分（DECIMAL(18,8)）
-            CALC_DETAIL_JSON       : 项目/开单科室/核算单元/大类/单项RVU/决策系数/汇总数量/开单决策积分 全量收敛
-   架构   : 双区块（第一区块 DELETE 幂等清理 + CTE 计算 + INSERT 落库 ~ 第二区块最外层接口读取）
-  =============================================================================== */
 
 -- =================================================================
 -- 第一区块：数据生成与持久化（幂等清理 + CTE 计算 + INSERT 落库）
@@ -268,52 +257,89 @@ joined AS (
         ON f.[PROJ_CODE] = d.[PROJ_CODE]
 ),
 
--- ── Logical CTE: 项目 × 开单科室 粒度聚合 ──
+-- ── Logical CTE: 核算单元 × 项目代码 粒度聚合（粒度上提，熵减去重） ──
+-- 纠偏要点：维度系数（RVU_VAL / DECISION_COFF）与科室描述字段严禁进入 GROUP BY，
+--           否则同一核算单元会被多版本维度二次打散，UNIT_CODE 冗余问题无法根除。
+--           故在本层先行收敛系数的唯一值，聚合键严格锁死 [核算单元编码 × 项目代码]。
+agg_coff_collapse AS (
+    SELECT
+        j.[PROJ_CODE],
+        MAX(j.[RVU_VAL])       AS RVU_VAL,
+        MAX(j.[DECISION_COFF]) AS DECISION_COFF,
+        COUNT(DISTINCT j.[RVU_VAL])       AS DISTINCT_RVU_CNT,
+        COUNT(DISTINCT j.[DECISION_COFF]) AS DISTINCT_COFF_CNT,
+        MAX(j.[ITEM_CAT_CODE]) AS ITEM_CAT_CODE,
+        MAX(j.[ITEM_CAT_NAME]) AS ITEM_CAT_NAME,
+        MAX(j.[PROJ_NAME])     AS PROJ_NAME
+    FROM joined AS j
+    GROUP BY j.[PROJ_CODE]
+),
 agg AS (
     SELECT
         CAST('{year}'  AS VARCHAR(10)) AS CALC_YEAR,
         CAST('{month}' AS VARCHAR(10)) AS CALC_MONTH,
+        ISNULL(j.[HPS_DEPT_CODE], CAST(j.[DEPT_CODE] AS VARCHAR(60))) AS UNIT_CODE,
+        ISNULL(j.[HPS_DEPT_NAME], j.[DEPT_NAME])                       AS UNIT_NAME,
         j.[PROJ_CODE],
-        j.[PROJ_NAME],
-        j.[DEPT_CODE],
-        j.[DEPT_NAME],
-        j.[HPS_DEPT_CODE],
-        j.[HPS_DEPT_NAME],
-        j.[MAPPING_SNAPSHOT],
-        j.[ITEM_CAT_CODE],
-        j.[ITEM_CAT_NAME],
-        j.[RVU_VAL],
-        j.[DECISION_COFF],
-        CAST(SUM(j.[QTY])        AS DECIMAL(18,8)) AS TOTAL_QTY,
-        CAST(SUM(j.[ITEM_SCORE]) AS DECIMAL(18,8)) AS DECISION_SCORE,
-        CAST(SUM(j.[QTY]) * j.[RVU_VAL] * j.[DECISION_COFF] AS DECIMAL(18,8)) AS DECISION_SCORE_CALC
+        c.[PROJ_NAME],
+        c.[ITEM_CAT_CODE],
+        c.[ITEM_CAT_NAME],
+        c.[RVU_VAL],
+        c.[DECISION_COFF],
+        CAST(SUM(j.[QTY])                      AS DECIMAL(18,8)) AS TOTAL_QTY,
+        CAST(SUM(j.[ITEM_SCORE])               AS DECIMAL(18,8)) AS DECISION_SCORE,
+        CAST(SUM(j.[QTY]) * c.[RVU_VAL] * c.[DECISION_COFF] AS DECIMAL(18,8)) AS DECISION_SCORE_CALC,
+        MAX(c.[DISTINCT_RVU_CNT])       AS DISTINCT_RVU_CNT,
+        MAX(c.[DISTINCT_COFF_CNT])      AS DISTINCT_COFF_CNT,
+        COUNT(DISTINCT ISNULL(j.[DEPT_CODE], 'N/A')) AS SRC_DEPT_CNT,
+        CAST(
+            '[' + STUFF((
+                SELECT DISTINCT
+                    '{"HIS_DEPT_CODE":"'   + ISNULL(CAST(x.[DEPT_CODE] AS VARCHAR(60)), '')
+                  + '","HIS_DEPT_NAME":"'  + ISNULL(x.[DEPT_NAME], '')
+                  + '","HPS_DEPT_CODE":"'  + ISNULL(x.[HPS_DEPT_CODE], CAST(x.[DEPT_CODE] AS VARCHAR(60)))
+                  + '","HPS_DEPT_NAME":"'  + ISNULL(x.[HPS_DEPT_NAME], x.[DEPT_NAME]) + '"}'
+                FROM joined AS x
+                WHERE x.[PROJ_CODE] = j.[PROJ_CODE]
+                  AND ISNULL(x.[HPS_DEPT_CODE], CAST(x.[DEPT_CODE] AS VARCHAR(60)))
+                      = ISNULL(j.[HPS_DEPT_CODE], CAST(j.[DEPT_CODE] AS VARCHAR(60)))
+                FOR XML PATH(''), TYPE
+            ).value('.', 'NVARCHAR(MAX)'), 1, 1, '') + ']'
+        AS NVARCHAR(MAX)) AS SRC_DEPT_MAPPING_JSON
     FROM joined AS j
+    INNER JOIN agg_coff_collapse AS c
+        ON j.[PROJ_CODE] = c.[PROJ_CODE]
     GROUP BY
+        ISNULL(j.[HPS_DEPT_CODE], CAST(j.[DEPT_CODE] AS VARCHAR(60))),
+        ISNULL(j.[HPS_DEPT_NAME], j.[DEPT_NAME]),
         j.[PROJ_CODE],
-        j.[PROJ_NAME],
-        j.[DEPT_CODE],
-        j.[DEPT_NAME],
-        j.[HPS_DEPT_CODE],
-        j.[HPS_DEPT_NAME],
-        j.[MAPPING_SNAPSHOT],
-        j.[ITEM_CAT_CODE],
-        j.[ITEM_CAT_NAME],
-        j.[RVU_VAL],
-        j.[DECISION_COFF]
+        c.[PROJ_NAME],
+        c.[ITEM_CAT_CODE],
+        c.[ITEM_CAT_NAME],
+        c.[RVU_VAL],
+        c.[DECISION_COFF]
 ),
 
--- ── Final CTE: 出口契约（应用层中文别名输出，数值统一 DECIMAL(18,8)） ──
+-- ── Logical CTE: 聚合链路完整性断言入口（同一 项目×核算单元 必须唯一） ──
+agg_audit AS (
+    SELECT
+        a.[UNIT_CODE],
+        a.[PROJ_CODE],
+        COUNT(1) AS ROW_CNT
+    FROM agg AS a
+    GROUP BY a.[UNIT_CODE], a.[PROJ_CODE]
+    HAVING COUNT(1) > 1
+),
+
+-- ── Final CTE: 出口契约（核算单元 × 项目代码 单条记录，数值统一 DECIMAL(18,8)） ──
 final AS (
     SELECT
         a.[CALC_YEAR],
         a.[CALC_MONTH],
+        a.[UNIT_CODE],
+        a.[UNIT_NAME],
         a.[PROJ_CODE],
         a.[PROJ_NAME],
-        a.[DEPT_CODE],
-        a.[DEPT_NAME],
-        a.[HPS_DEPT_CODE],
-        a.[HPS_DEPT_NAME],
-        a.[MAPPING_SNAPSHOT],
         a.[ITEM_CAT_CODE],
         a.[ITEM_CAT_NAME],
         a.[RVU_VAL],
@@ -321,33 +347,23 @@ final AS (
         a.[TOTAL_QTY],
         a.[DECISION_SCORE],
         a.[DECISION_SCORE_CALC],
+        a.[SRC_DEPT_CNT],
+        a.[SRC_DEPT_MAPPING_JSON],
         CAST(a.[DECISION_SCORE] - a.[DECISION_SCORE_CALC] AS DECIMAL(18,8)) AS DIFF_CHECK,
-        '医疗服务开单积分 | 项目开单积分 = 汇总数量 × 单项RVU点数 × 诊疗决策系数 | '
-            + CAST(a.[TOTAL_QTY]     AS VARCHAR(50)) + ' × '
-            + CAST(a.[RVU_VAL]       AS VARCHAR(50)) + ' × '
-            + CAST(a.[DECISION_COFF] AS VARCHAR(50)) + ' | '
-            + CAST(a.[DECISION_SCORE] AS VARCHAR(50)) AS CALC_PROCESS_TEXT
+        -- 四段式审计文本：[元数据段] | [中文逻辑公式段] | [纯数学代入算式段] | [纯数字结算算式段]
+        '医疗服务开单积分 | '
+            + '核算单元项目汇总积分 = 汇总数量 × 单项RVU点数 × 诊疗决策系数 | '
+            + CAST(CAST(a.[TOTAL_QTY]     AS DECIMAL(18,8)) AS VARCHAR(50)) + ' × '
+            + CAST(CAST(a.[RVU_VAL]       AS DECIMAL(18,8)) AS VARCHAR(50)) + ' × '
+            + CAST(CAST(a.[DECISION_COFF] AS DECIMAL(18,8)) AS VARCHAR(50)) + ' = '
+            + CAST(CAST(a.[DECISION_SCORE] AS DECIMAL(18,8)) AS VARCHAR(50)) + ' | '
+            + CAST(CAST(a.[DECISION_SCORE] AS DECIMAL(18,8)) AS VARCHAR(50)) + ' + '
+            + CAST(CAST(0 AS DECIMAL(18,8)) AS VARCHAR(50)) + ' = '
+            + CAST(CAST(a.[DECISION_SCORE] AS DECIMAL(18,8)) AS VARCHAR(50)) AS CALC_PROCESS_TEXT
     FROM agg AS a
 )
 
-SELECT
-    f.[CALC_YEAR]                                                   AS [核算年份],
-    f.[CALC_MONTH]                                                  AS [核算月份],
-    f.[PROJ_CODE]                                                   AS [项目代码],
-    f.[PROJ_NAME]                                                   AS [项目名称],
-    f.[DEPT_CODE]                                                   AS [开单科室代码],
-    f.[DEPT_NAME]                                                   AS [开单科室名称],
-    f.[HPS_DEPT_CODE]                                               AS [核算单元编码],
-    f.[HPS_DEPT_NAME]                                               AS [核算单元名称],
-    f.[MAPPING_SNAPSHOT]                                            AS [核算单元映射关系],
-    f.[ITEM_CAT_CODE]                                               AS [绩效核算大类代码],
-    f.[ITEM_CAT_NAME]                                               AS [绩效核算大类名称],
-    CAST(f.[RVU_VAL] AS DECIMAL(18,8))                              AS [单项RVU点数],
-    CAST(f.[DECISION_COFF] AS DECIMAL(18,8))                        AS [诊疗决策系数],
-    CAST(f.[TOTAL_QTY] AS DECIMAL(18,8))                            AS [汇总数量],
-    CAST(f.[DECISION_SCORE] AS DECIMAL(18,8))                       AS [开单决策积分],
-    f.[CALC_PROCESS_TEXT]                                           AS [计算过程描述]
-
+-- ── 持久化出口：核算单元 × 项目代码 一行即一条 JSON 明细（ENVELOPE 封箱） ──
 INSERT INTO [dbo].[DWD_FIN_CALC_DETAIL_LOG] (
     [CALC_YEAR], [CALC_MONTH], [ITEM_CODE], [ITEM_NAME], [SCRIPT_NAME],
     [UNIT_CODE], [UNIT_NAME], [STAFF_CODE], [STAFF_NAME], [STAFF_TYPE],
@@ -360,56 +376,38 @@ SELECT
     'ITEM_MEDICAL_SERVICE_ORDER_SCORE'                             AS [ITEM_CODE],
     '医疗服务项目开单积分'                                          AS [ITEM_NAME],
     '医疗服务项目开单积分.sql'                                      AS [SCRIPT_NAME],
-    ISNULL(f.[核算单元编码], f.[开单科室代码])                      AS [UNIT_CODE],
-    ISNULL(f.[核算单元名称], f.[开单科室名称])                      AS [UNIT_NAME],
+    f.[UNIT_CODE]                                                  AS [UNIT_CODE],
+    f.[UNIT_NAME]                                                  AS [UNIT_NAME],
     'N/A'                                                          AS [STAFF_CODE],
     'N/A'                                                          AS [STAFF_NAME],
     NULL                                                           AS [STAFF_TYPE],
     'N/A'                                                          AS [POST_CODE],
     'N/A'                                                          AS [POST_NAME],
-    CAST(f.[开单决策积分] AS DECIMAL(18,8))                         AS [FINAL_VALUE],
-    f.[计算过程描述]                                                AS [CALC_PROCESS_TEXT],
+    CAST(f.[DECISION_SCORE] AS DECIMAL(18,8))                      AS [FINAL_VALUE],
+    f.[CALC_PROCESS_TEXT]                                          AS [CALC_PROCESS_TEXT],
     (
         SELECT
-            f.[核算年份]                     AS [CALC_YEAR],
-            f.[核算月份]                     AS [CALC_MONTH],
-            f.[项目代码]                     AS [PROJ_CODE],
-            f.[项目名称]                     AS [PROJ_NAME],
-            f.[开单科室代码]                 AS [DEPT_CODE],
-            f.[开单科室名称]                 AS [DEPT_NAME],
-            f.[核算单元编码]                 AS [HPS_DEPT_CODE],
-            f.[核算单元名称]                 AS [HPS_DEPT_NAME],
-            JSON_QUERY(f.[核算单元映射关系]) AS [MAPPING_SNAPSHOT],
-            f.[绩效核算大类代码]             AS [ITEM_CAT_CODE],
-            f.[绩效核算大类名称]             AS [ITEM_CAT_NAME],
-            f.[单项RVU点数]                  AS [RVU_VAL],
-            f.[诊疗决策系数]                 AS [DECISION_COFF],
-            f.[汇总数量]                     AS [TOTAL_QTY],
-            f.[开单决策积分]                 AS [DECISION_SCORE]
+            f.[CALC_YEAR]                     AS [CALC_YEAR],
+            f.[CALC_MONTH]                    AS [CALC_MONTH],
+            f.[UNIT_CODE]                     AS [HPS_DEPT_CODE],
+            f.[UNIT_NAME]                     AS [HPS_DEPT_NAME],
+            f.[PROJ_CODE]                     AS [PROJ_CODE],
+            f.[PROJ_NAME]                     AS [PROJ_NAME],
+            f.[ITEM_CAT_CODE]                 AS [ITEM_CAT_CODE],
+            f.[ITEM_CAT_NAME]                 AS [ITEM_CAT_NAME],
+            CAST(f.[RVU_VAL] AS DECIMAL(18,8))        AS [RVU_VAL],
+            CAST(f.[DECISION_COFF] AS DECIMAL(18,8))  AS [DECISION_COFF],
+            CAST(f.[TOTAL_QTY] AS DECIMAL(18,8))      AS [TOTAL_QTY],
+            CAST(f.[DECISION_SCORE] AS DECIMAL(18,8)) AS [DECISION_SCORE],
+            CAST(f.[DECISION_SCORE_CALC] AS DECIMAL(18,8)) AS [DECISION_SCORE_CALC],
+            CAST(f.[DIFF_CHECK] AS DECIMAL(18,8))     AS [DIFF_CHECK],
+            f.[SRC_DEPT_CNT]                  AS [SRC_DEPT_CNT],
+            JSON_QUERY(f.[SRC_DEPT_MAPPING_JSON]) AS [SRC_DEPT_MAPPING]
         FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
     )                                                              AS [CALC_DETAIL_JSON],
     SYSDATETIME()                                                  AS [CREATE_TIME]
-FROM (
-    SELECT
-        f.[CALC_YEAR]                                        AS [核算年份],
-        f.[CALC_MONTH]                                       AS [核算月份],
-        f.[PROJ_CODE]                                        AS [项目代码],
-        f.[PROJ_NAME]                                        AS [项目名称],
-        f.[DEPT_CODE]                                        AS [开单科室代码],
-        f.[DEPT_NAME]                                        AS [开单科室名称],
-        f.[HPS_DEPT_CODE]                                    AS [核算单元编码],
-        f.[HPS_DEPT_NAME]                                    AS [核算单元名称],
-        f.[MAPPING_SNAPSHOT]                                 AS [核算单元映射关系],
-        f.[ITEM_CAT_CODE]                                    AS [绩效核算大类代码],
-        f.[ITEM_CAT_NAME]                                    AS [绩效核算大类名称],
-        CAST(f.[RVU_VAL] AS DECIMAL(18,8))                   AS [单项RVU点数],
-        CAST(f.[DECISION_COFF] AS DECIMAL(18,8))             AS [诊疗决策系数],
-        CAST(f.[TOTAL_QTY] AS DECIMAL(18,8))                 AS [汇总数量],
-        CAST(f.[DECISION_SCORE] AS DECIMAL(18,8))            AS [开单决策积分],
-        f.[CALC_PROCESS_TEXT]                                AS [计算过程描述]
-    FROM final AS f
-) AS f
-WHERE ISNULL(f.[核算单元编码], f.[开单科室代码]) IN {struct_codes};
+FROM final AS f
+WHERE f.[UNIT_CODE] IN {struct_codes};
 ~
 
 -- =================================================================
