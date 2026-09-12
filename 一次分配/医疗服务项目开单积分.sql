@@ -33,6 +33,7 @@
      不再向上游沉淀，杜绝无关维度污染聚合粒度与冗余字符串拼接。
 
   修改日志：
+  2026-09-12 22:50:00 | 字段扩展 | 追加 TOTAL_QTY 物理列映射（CAST(f.[TOTAL_QTY] AS DECIMAL(18,8))）至 DWD_FIN_CALC_ALLOC1_DETAIL_LOG，将工作量/工分一等公民化（BI 可直接 SUM 对账，免解析 JSON）；CALC_DETAIL_JSON 由 9 节点扩展为 13 节点全量过程仓，补齐 核算年份/核算月份/核算单元编码/核算单元名称 及 计算过程描述（账期与单元编码因 agg 层为文本形态，按源列声明宽度 CAST AS VARCHAR(10) 序列化，与物理 INT 列语义同源）；其余计算 CTE 与双区块 Envelope 结构零改动。
   2026-09-12 22:30:00 | 架构持久化 | Envelope Pattern 双区块重构：第一区块前置幂等 DELETE（按 CALC_YEAR/CALC_MONTH/ITEM_CODE/UNIT_CODE 清理，清场范围 ⊇ UQ 前缀 (CALC_YEAR,CALC_MONTH,ITEM_CODE,UNIT_CODE,PROJ_CODE) 故语义安全），计算收敛后 INSERT 落至一次分配专用物理表 DWD_FIN_CALC_ALLOC1_DETAIL_LOG（ITEM_CODE='ITEM_MED_SVC_ORDER_SCORE' / FINAL_VALUE_TYPE='SCORE'），显式下沉 PROJ_CODE/PROJ_NAME/ITEM_CAT_CODE/ITEM_CAT_NAME 命脉列，过程因子（单项RVU/决策系数/汇总数量）经 FOR JSON PATH 收敛入 CALC_DETAIL_JSON；第二区块以 `~` 隔离，从物理表读取生成 CTE_DWD_READ_ALIAS 并严格承接 struct_code/struct_name/result_value 模板契约（末尾补分号闭合）。原 fact_raw → final 全部计算 CTE 零改动。
   2026-09-12 21:10:00 | 架构瘦身 | 链路剪枝：彻底剥离原始开单科室字段（DEPT_CODE/DEPT_NAME）及中间映射快照 JSON（MAPPING_SNAPSHOT），原始科室降级为纯"渡河之桥"仅用于匹配映射表；聚合粒度锁死为【核算单元编码 × 核算单元名称 × 项目代码】；移除 agg 层 O(N²) 冗余自连接，重构为"明细计算 → 维度系数收敛 → 目标粒度汇总"三段解耦，消除行级放大与嵌套子查询卡顿；新增 UNKNOWN/未映射 兜底标记。
   2026-09-12 18:30:00 | 维度扩展 | 引入 sjjk_DEPT_UNIT_MAPPING_2025_11_27 拉链映射表（限定 PERFORM_PERSON_TYPE_CODE='1001' 且基于开单时间半开区间匹配），扩展绩效核算单元编码、名称及映射行快照 JSON；纠偏关联键编码口径（事实层数值补零归一至维表旧版字符编码），纠偏同键重复行导致的行级膨胀。
@@ -49,6 +50,9 @@
   输出契约   : 核算年份 / 核算月份 / 核算单元编码 / 核算单元名称 / 项目代码 / 项目名称
                / 绩效核算大类代码 / 绩效核算大类名称 / 单项RVU点数 / 诊疗决策系数
                / 汇总数量 / 开单决策积分 / 计算过程描述
+  落库契约   : 第一区块写入 dbo.DWD_FIN_CALC_ALLOC1_DETAIL_LOG（一次分配专用物理表）
+               列化核对列: FINAL_VALUE(开单决策积分) + TOTAL_QTY(汇总工作量)
+               JSON 过程仓: CALC_DETAIL_JSON 全量 13 节点（账期/单元/项目/大类/因子/过程描述）
   粒度定义   : 核算单元编码(HPS_DEPT_CODE) × 核算单元名称(HPS_DEPT_NAME) × 项目代码(PROJ_CODE)
                原始开单科室（DEPT_CODE/DEPT_NAME）与映射快照仅作为关联核算单元的中间桥梁，汇总层全量剥离
   =============================================================================== */
@@ -58,13 +62,14 @@
 -- 落库目标：dbo.DWD_FIN_CALC_ALLOC1_DETAIL_LOG（一次分配 · 核算单元 × 项目 粒度专用物理表）
 -- 唯一键对齐：(CALC_YEAR, CALC_MONTH, ITEM_CODE, UNIT_CODE, PROJ_CODE)
 -- =================================================================
-
+~
 -- 1. 幂等清理历史数据（清场范围 = ITEM_CODE + UNIT_CODE，已完全覆盖 UQ 前 4 列，重跑零脏数据）
 DELETE FROM [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]
 WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
   AND [CALC_MONTH] = CAST('{month}' AS INT)
   AND [ITEM_CODE]  = N'ITEM_MED_SVC_ORDER_SCORE'
-  AND [UNIT_CODE] IN ({struct_codes});
+  AND [UNIT_CODE] IN {struct_codes}
+;
 
 -- 2. 算子计算与持久化落库（fact_raw → final 计算链路零改动）
 WITH
@@ -274,13 +279,13 @@ final AS (
             + CAST(a.[DECISION_SCORE] AS VARCHAR(50)) + ' + 0 = '
             + CAST(a.[DECISION_SCORE] AS VARCHAR(50)) AS CALC_PROCESS_TEXT
     FROM agg AS a
-    WHERE a.[UNIT_CODE] IN ({struct_codes})
+    WHERE a.[UNIT_CODE] IN {struct_codes}
 )
 
 INSERT INTO [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
     [CALC_YEAR], [CALC_MONTH], [ITEM_CODE], [ITEM_NAME], [SCRIPT_NAME],
     [UNIT_CODE], [UNIT_NAME], [PROJ_CODE], [PROJ_NAME], [ITEM_CAT_CODE], [ITEM_CAT_NAME],
-    [FINAL_VALUE_TYPE], [FINAL_VALUE], [CALC_PROCESS_TEXT], [CALC_DETAIL_JSON], [CREATE_TIME]
+    [FINAL_VALUE_TYPE], [FINAL_VALUE], [TOTAL_QTY], [CALC_PROCESS_TEXT], [CALC_DETAIL_JSON], [CREATE_TIME]
 )
 SELECT
     CAST(f.[CALC_YEAR]  AS INT)                 AS [CALC_YEAR],
@@ -296,9 +301,14 @@ SELECT
     f.[ITEM_CAT_NAME]                           AS [ITEM_CAT_NAME],
     N'SCORE'                                    AS [FINAL_VALUE_TYPE],
     CAST(f.[DECISION_SCORE] AS DECIMAL(18,8))   AS [FINAL_VALUE],
+    CAST(f.[TOTAL_QTY]      AS DECIMAL(18,8))   AS [TOTAL_QTY],
     f.[CALC_PROCESS_TEXT]                       AS [CALC_PROCESS_TEXT],
     (
         SELECT
+            CAST(f.[CALC_YEAR]  AS VARCHAR(10))        AS [核算年份],
+            CAST(f.[CALC_MONTH] AS VARCHAR(10))        AS [核算月份],
+            f.[UNIT_CODE]                              AS [核算单元编码],
+            f.[UNIT_NAME]                              AS [核算单元名称],
             f.[PROJ_CODE]                              AS [项目代码],
             f.[PROJ_NAME]                              AS [项目名称],
             f.[ITEM_CAT_CODE]                          AS [绩效核算大类代码],
@@ -307,7 +317,7 @@ SELECT
             CAST(f.[DECISION_COFF] AS DECIMAL(18,8))   AS [诊疗决策系数],
             CAST(f.[TOTAL_QTY]     AS DECIMAL(18,8))   AS [汇总数量],
             CAST(f.[DECISION_SCORE] AS DECIMAL(18,8))  AS [开单决策积分],
-            CAST(f.[DECISION_SCORE] AS DECIMAL(18,8))  AS [最终结果]
+            f.[CALC_PROCESS_TEXT]                      AS [计算过程描述]
         FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
     )                                           AS [CALC_DETAIL_JSON],
     SYSDATETIME()                               AS [CREATE_TIME]
@@ -340,19 +350,20 @@ WITH CTE_DWD_READ_ALIAS AS (
     WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
       AND [CALC_MONTH] = CAST('{month}' AS INT)
       AND [ITEM_CODE]  = N'ITEM_MED_SVC_ORDER_SCORE'
-      AND [UNIT_CODE] IN ({struct_codes})
+      AND [UNIT_CODE] IN {struct_codes}
 )
 
 SELECT
+    {
     [核算单元编码] AS struct_code,
     [核算单元名称] AS struct_name,
     SUM([最终结果]) AS result_value
-~
-
+    }
 FROM CTE_DWD_READ_ALIAS
+    ~
 GROUP BY
     [核算单元编码],
     [核算单元名称]
-~
-;
+    ~
+    ;
 
