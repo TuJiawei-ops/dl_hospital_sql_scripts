@@ -1,10 +1,14 @@
 -- =================================================================
 -- 表名：DWD_FIN_CALC_DETAIL_LOG
 -- 分层：DWD（明细层）
--- 业务定义：绩效一次二次分配核算明细统一持久化日志表
+-- 业务定义：绩效二次分配（核算单元 × 员工 × 岗位粒度）核算明细持久化日志表
 -- 架构：EAV-Hybrid（极简公共维度列化 + 全量无损 JSON 过程仓）
 -- 唯一键：CALC_YEAR + CALC_MONTH + ITEM_CODE + UNIT_CODE + STAFF_CODE + POST_CODE
+-- 解耦说明：一次分配（核算单元 × 项目/指标粒度）已物理剥离至
+--           [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]（显式承载 PROJ_CODE/PROJ_NAME/ITEM_CAT_CODE/ITEM_CAT_NAME）。
+--           本表退守【二次分配】唯一职责，禁止再承载一次分配明细，杜绝 STAFF_CODE/POST_CODE 填充 'N/A' 的工程妥协。
 -- 修改日志：
+-- 2026-09-12 22:10:00 | 架构解耦 | 表职责收敛为【二次分配】专用（核算单元 × 员工 × 岗位）；一次分配明细物理剥离至 DWD_FIN_CALC_ALLOC1_DETAIL_LOG，本表不再承接一次分配数据，表级注释同步纠偏
 -- 2026-08-17 21:45:00 | 架构升级 | 创建 EAV-Hybrid 统一持久化明细日志表 DDL
 -- 2026-08-17 22:10:00 | 架构瘦身 | 剔除物理过程列，中间因子全量收敛至 CALC_DETAIL_JSON
 -- 2026-08-17 22:45:00 | 规范纠偏 | 引入 ITEM_CODE/ITEM_NAME 标准核算项维度，将 SCRIPT_NAME 降级为运维审计字段，重构唯一索引
