@@ -21,6 +21,7 @@
      与落库精度同源，杜绝低精度截断累积误差。
 
   修改日志：
+  2026-09-12 18:00:00 | 字段扩展 | 新增核算年份与月份字段；新增符合四段式规范的计算过程描述字段；最外层别名统一转换为中文。
   2026-09-12 17:30:00 | 占位符重构 | 重构占位符为 '{year}'/'{month}'，移除 {version_no} 参数，锁定最新版本快照
   2026-09-12 00:00:00 | 脚本新建 | 依据事实层与维表层 DDL 契约创建医疗服务项目开单积分汇总脚本；
                                     纠偏 DECIMAL(18,4) 为 DECIMAL(18,8)；新增维表版本号收敛层防笛卡尔放大；
@@ -30,8 +31,9 @@
   '{year}'      : 核算年份, 4 位数字文本, 默认 '2025'
   '{month}'     : 核算月份, 1-12 文本, 默认 '6'
   {struct_codes}: 科室代码过滤集, 英文逗号分隔; 留空则不过滤
-  输出契约   : PROJ_CODE / PROJ_NAME / DEPT_CODE / DEPT_NAME / ITEM_CAT_CODE / ITEM_CAT_NAME
-               / RVU_VAL / DECISION_COFF / TOTAL_QTY / DECISION_SCORE
+  输出契约   : 核算年份 / 核算月份 / 项目代码 / 项目名称 / 开单科室代码 / 开单科室名称
+               / 绩效核算大类代码 / 绩效核算大类名称 / 单项RVU点数 / 诊疗决策系数
+               / 汇总数量 / 开单决策积分 / 计算过程描述
   =============================================================================== */
 
 WITH
@@ -120,6 +122,8 @@ joined AS (
 -- ── Logical CTE: 项目 × 开单科室 粒度聚合 ──
 agg AS (
     SELECT
+        CAST('{year}'  AS VARCHAR(10)) AS CALC_YEAR,
+        CAST('{month}' AS VARCHAR(10)) AS CALC_MONTH,
         j.[PROJ_CODE],
         j.[PROJ_NAME],
         j.[DEPT_CODE],
@@ -143,9 +147,11 @@ agg AS (
         j.[DECISION_COFF]
 ),
 
--- ── Final CTE: 出口契约（字段全大写下划线，数值统一 DECIMAL(18,8)） ──
+-- ── Final CTE: 出口契约（应用层中文别名输出，数值统一 DECIMAL(18,8)） ──
 final AS (
     SELECT
+        a.[CALC_YEAR],
+        a.[CALC_MONTH],
         a.[PROJ_CODE],
         a.[PROJ_NAME],
         a.[DEPT_CODE],
@@ -157,8 +163,27 @@ final AS (
         a.[TOTAL_QTY],
         a.[DECISION_SCORE],
         a.[DECISION_SCORE_CALC],
-        CAST(a.[DECISION_SCORE] - a.[DECISION_SCORE_CALC] AS DECIMAL(18,8)) AS DIFF_CHECK
+        CAST(a.[DECISION_SCORE] - a.[DECISION_SCORE_CALC] AS DECIMAL(18,8)) AS DIFF_CHECK,
+        '医疗服务开单积分 | 项目开单积分 = 汇总数量 × 单项RVU点数 × 诊疗决策系数 | '
+            + CAST(a.[TOTAL_QTY]     AS VARCHAR(50)) + ' × '
+            + CAST(a.[RVU_VAL]       AS VARCHAR(50)) + ' × '
+            + CAST(a.[DECISION_COFF] AS VARCHAR(50)) + ' | '
+            + CAST(a.[DECISION_SCORE] AS VARCHAR(50)) AS CALC_PROCESS_TEXT
     FROM agg AS a
 )
 
-SELECT * FROM final;
+SELECT
+    f.[CALC_YEAR]                                                   AS [核算年份],
+    f.[CALC_MONTH]                                                  AS [核算月份],
+    f.[PROJ_CODE]                                                   AS [项目代码],
+    f.[PROJ_NAME]                                                   AS [项目名称],
+    f.[DEPT_CODE]                                                   AS [开单科室代码],
+    f.[DEPT_NAME]                                                   AS [开单科室名称],
+    f.[ITEM_CAT_CODE]                                               AS [绩效核算大类代码],
+    f.[ITEM_CAT_NAME]                                               AS [绩效核算大类名称],
+    CAST(f.[RVU_VAL] AS DECIMAL(18,8))                              AS [单项RVU点数],
+    CAST(f.[DECISION_COFF] AS DECIMAL(18,8))                        AS [诊疗决策系数],
+    CAST(f.[TOTAL_QTY] AS DECIMAL(18,8))                            AS [汇总数量],
+    CAST(f.[DECISION_SCORE] AS DECIMAL(18,8))                       AS [开单决策积分],
+    f.[CALC_PROCESS_TEXT]                                           AS [计算过程描述]
+FROM final AS f;
