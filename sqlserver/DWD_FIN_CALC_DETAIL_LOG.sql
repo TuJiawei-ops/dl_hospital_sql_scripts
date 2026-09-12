@@ -1,7 +1,7 @@
 -- =================================================================
 -- 表名：DWD_FIN_CALC_DETAIL_LOG
 -- 分层：DWD（明细层）
--- 业务定义：绩效二次分配核算明细统一持久化日志表
+-- 业务定义：绩效一次二次分配核算明细统一持久化日志表
 -- 架构：EAV-Hybrid（极简公共维度列化 + 全量无损 JSON 过程仓）
 -- 唯一键：CALC_YEAR + CALC_MONTH + ITEM_CODE + UNIT_CODE + STAFF_CODE + POST_CODE
 -- 修改日志：
@@ -26,9 +26,9 @@ CREATE TABLE [dbo].[DWD_FIN_CALC_DETAIL_LOG] (
     [ITEM_CODE]             NVARCHAR(50)        NOT NULL,   -- 核算项编码（业务唯一标识，如 ITEM_ENG_MIL_PERF）
     [ITEM_NAME]             NVARCHAR(200)       NULL,       -- 核算项名称（如 '医学工程科军文员工绩效核算'）
     [SCRIPT_NAME]           NVARCHAR(200)       NULL,       -- 执行脚本/算子名称（运维追溯源文件名）
-    -- ===== 科室维度 =====
-    [UNIT_CODE]             NVARCHAR(50)        NOT NULL,   -- 单位/科室编码（DEPT_CODE）
-    [UNIT_NAME]             NVARCHAR(200)       NULL,       -- 单位/科室名称
+    -- ===== 核算单元维度 =====
+    [UNIT_CODE]             NVARCHAR(50)        NOT NULL,   -- 核算单元编码（DEPT_CODE）
+    [UNIT_NAME]             NVARCHAR(200)       NULL,       -- 核算单元名称
     -- ===== 员工维度 =====
     [STAFF_CODE]            NVARCHAR(50)        NOT NULL,   -- 员工编码
     [STAFF_NAME]            NVARCHAR(100)       NULL,       -- 员工姓名
@@ -67,7 +67,7 @@ GO
 -- =================================================================
 
 EXEC sp_addextendedproperty 
-    @name = N'MS_Description', @value = N'绩效二次分配核算明细统一持久化日志表（EAV-Hybrid 架构：公共维度列化 + JSON 过程仓）',
+    @name = N'MS_Description', @value = N'绩效一次二次分配核算明细统一持久化日志表（EAV-Hybrid 架构：公共维度列化 + JSON 过程仓）',
     @level0type = N'SCHEMA', @level0name = N'dbo',
     @level1type = N'TABLE',  @level1name = N'DWD_FIN_CALC_DETAIL_LOG';
 GO
@@ -96,11 +96,11 @@ EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'核算脚本/�
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'SCRIPT_NAME';
 GO
 
-EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'单位/科室编码（DEPT_CODE）',
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'核算单元编码（DEPT_CODE）',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'UNIT_CODE';
 GO
 
-EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'单位/科室名称',
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'核算单元名称',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'UNIT_NAME';
 GO
 
