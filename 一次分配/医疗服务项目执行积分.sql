@@ -57,20 +57,37 @@
      不做任何 GROUP BY 聚合，保持明细粒度以供下游按医技护角色二次切分。
   9. 【字段裁剪】开单科室（[开单科室代码] / [开单科室]）与执行积分核算口径无关，
      已从事实层抽取、关联层、收敛层及出口契约中全量移除，杜绝无关维度污染与冗余 I/O。
+  10.【粒度收敛】事实层在取得字典业务编码后立即完成 (执行科室 × 项目代码) 预聚合，
+     输出 SUM(数量) 与 SUM(金额)；[执行时间] 与 [单价] 不再向上游沉淀。
+     价值：同一科室同一项目的成百上千笔收费明细在此坍缩为单行，压降 90%+ 物理行数，
+     使后续维度关联与出口 IO 成本与【科室 × 项目】数量级对齐，而非与收费笔数对齐。
+  11.【平均单价语义】原 [单价] 为单笔成交价，聚合后无单一取值可代表全组，
+     故出口按加权平均还原为 [平均单价] = SUM(金额) ÷ SUM(数量)，
+     并以 CASE WHEN SUM(数量) <> 0 守卫零除（数量为 0 或冲红抵消时兜底 0.00000000）。
+     该列是导出型度量，不具备独立聚合可加性，严禁下游再做 SUM 或 AVG。
+  12.【账期哨兵】聚合后 [执行时间] 已被消除，但下游维表（如拉链映射）可能需要账期时点
+     做半开区间匹配。故在出口携带 BIZ_EPOCH = 次月 1 日 00:00:00（账期右端点哨兵），
+     以常量穿越 CTE 链而非污染聚合键；该列不作为业务时点列对外输出。
 
   ── 模板占位符（严禁破坏） ──
   '{year}'      : 核算年份, 4 位数字文本, 默认 '2025'
   '{month}'     : 核算月份, 1-12 文本, 默认 '6'
   {struct_codes}: 科室代码过滤集, 英文逗号分隔; 留空则不过滤
-  输出契约   : 执行科室代码 / 执行科室 / 项目代码 / 项目名称 / 数量 / 单价 / 金额
+  输出契约   : 执行科室代码 / 执行科室 / 项目代码 / 项目名称 / 数量 / 平均单价 / 金额
                / 绩效核算大类代码 / 绩效核算大类名称 / 单项RVU点数 / 诊疗决策系数
                / 医生执行比例 / 技师执行比例 / 护士执行比例
                / 医生核算单元编码 / 医生核算单元名称
                / 技师核算单元编码 / 技师核算单元名称
                / 护士核算单元编码 / 护士核算单元名称
-  粒度定义   : 事实层收费明细行（执行科室 × 项目代码）
+  粒度定义   : 【执行科室 × 收费项目】聚合粒度
+               GROUP BY (EXEC_DEPT_ID, EXEC_DEPT_NAME, PROJ_CODE, PROJ_NAME)
+               事实层完成预聚合后再进入维度关联链，压降重复明细行数
+  【EPOCH】  : BIZ_EPOCH 为账期边界哨兵值（次月 1 日 00:00:00），
+               仅用于携带账期信息穿越 CTE 链，供下游做半开区间时点匹配，
+               严禁作为业务时点列对外输出，严禁参与聚合或分组。
 
   修改日志：
+  2026-09-14 10:05:00 | 粒度收敛聚合 | 移除 [执行时间] 维度与明细输出；事实层按 (执行科室代码, 执行科室, 项目代码, 项目名称) 进行 GROUP BY 聚合，输出 SUM(数量) 与 SUM(金额)，大幅减少物理行数。
   2026-09-14 09:50:00 | 关联修复与裁剪 | 彻底移除开单科室代码/名称输出；通过 sjjk_bmb_2025_06_01 桥接事实层 执行科室代码 (id) 与维表 HIS_DEPT_CODE (编码) 的主键关联。
   2026-09-14 07:00:00 | 重构熵减 | 按系统单版本假设，移除 VERSION_NO 窗口函数收敛逻辑，降低计算熵值与算子开销：
                                  彻底删除 dim_latest_version CTE（含 ROW_NUMBER() OVER (PARTITION BY PROJ_CODE, MEAS_UNIT
@@ -96,23 +113,27 @@ dept_dict AS (
     FROM dbo.[sjjk_bmb_2025_06_01] AS b WITH (NOLOCK)
 ),
 
--- ── Import CTE: 事实层收费明细（执行科室通过字典桥接取得业务编码，半开区间 月初 至 次月初） ──
+-- ── Import CTE: 事实层【执行科室 × 项目】预聚合（字典桥接取业务编码，压降明细行数） ──
 fact_raw AS (
     SELECT
-        a.[项目代码]                                  AS PROJ_CODE,
-        a.[项目名称]                                  AS PROJ_NAME,
-        a.[执行科室代码]                              AS EXEC_DEPT_ID,
-        a.[执行科室]                                  AS EXEC_DEPT_NAME,
-        d.[DEPT_CODE]                                 AS EXEC_DEPT_CODE_KEY,
-        a.[执行时间]                                  AS EXEC_TIME,
-        CAST(a.[数量] AS DECIMAL(18,8))               AS QTY,
-        CAST(a.[单价] AS DECIMAL(18,8))               AS UNIT_PRICE,
-        CAST(a.[金额] AS DECIMAL(18,8))               AS AMOUNT
+        a.[项目代码]                                        AS PROJ_CODE,
+        a.[项目名称]                                        AS PROJ_NAME,
+        a.[执行科室代码]                                    AS EXEC_DEPT_ID,
+        a.[执行科室]                                        AS EXEC_DEPT_NAME,
+        d.[DEPT_CODE]                                       AS EXEC_DEPT_CODE_KEY,
+        CAST(SUM(CAST(a.[数量] AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS QTY,
+        CAST(SUM(CAST(a.[金额] AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS AMOUNT
     FROM dbo.[PF临时医疗服务项目26A] AS a WITH (NOLOCK)
     INNER JOIN dept_dict AS d
         ON a.[执行科室代码] = d.[DEPT_ID]
     WHERE a.[执行时间] >= DATEFROMPARTS(CAST('{year}' AS INT), CAST('{month}' AS INT), 1)
       AND a.[执行时间] <  DATEADD(MONTH, 1, DATEFROMPARTS(CAST('{year}' AS INT), CAST('{month}' AS INT), 1))
+    GROUP BY
+        a.[项目代码],
+        a.[项目名称],
+        a.[执行科室代码],
+        a.[执行科室],
+        d.[DEPT_CODE]
 ),
 
 -- ── Import CTE: 绩效大类维表作用域（大类剔除在 JOIN 前完成剪枝） ──
@@ -161,17 +182,16 @@ dim_collapse AS (
     GROUP BY d.[PROJ_CODE]
 ),
 
--- ── Logical CTE: 事实 × 绩效大类 × 医技护执行划分 三表关联（明细粒度，不聚合） ──
+-- ── Logical CTE: 事实(聚合) × 绩效大类 × 医技护执行划分 关联（【执行科室 × 项目】粒度） ──
 joined AS (
     SELECT
+        DATEADD(MONTH, 1, DATEFROMPARTS(CAST('{year}' AS INT), CAST('{month}' AS INT), 1)) AS BIZ_EPOCH,
         f.[EXEC_DEPT_ID],
         f.[EXEC_DEPT_NAME],
         f.[EXEC_DEPT_CODE_KEY],
-        f.[EXEC_TIME],
         f.[PROJ_CODE],
         f.[PROJ_NAME],
         f.[QTY],
-        f.[UNIT_PRICE],
         f.[AMOUNT],
         c.[ITEM_CAT_CODE],
         c.[ITEM_CAT_NAME],
@@ -199,13 +219,16 @@ final AS (
     SELECT
         CAST('{year}'  AS VARCHAR(10)) AS CALC_YEAR,
         CAST('{month}' AS VARCHAR(10)) AS CALC_MONTH,
+        j.[BIZ_EPOCH],
         j.[EXEC_DEPT_ID],
         j.[EXEC_DEPT_NAME],
         j.[PROJ_CODE],
         j.[PROJ_NAME],
-        j.[EXEC_TIME],
         j.[QTY],
-        j.[UNIT_PRICE],
+        CASE WHEN j.[QTY] <> CAST(0 AS DECIMAL(18,8))
+             THEN CAST(j.[AMOUNT] / j.[QTY] AS DECIMAL(18,8))
+             ELSE CAST(0.00000000 AS DECIMAL(18,8))
+        END                            AS AVG_UNIT_PRICE,
         j.[AMOUNT],
         j.[ITEM_CAT_CODE],
         j.[ITEM_CAT_NAME],
@@ -231,9 +254,8 @@ SELECT
    ,f.[EXEC_DEPT_NAME]           AS [执行科室]
    ,f.[PROJ_CODE]                AS [项目代码]
    ,f.[PROJ_NAME]                AS [项目名称]
-   ,f.[EXEC_TIME]                AS [执行时间]
    ,f.[QTY]                      AS [数量]
-   ,f.[UNIT_PRICE]               AS [单价]
+   ,f.[AVG_UNIT_PRICE]           AS [平均单价]
    ,f.[AMOUNT]                   AS [金额]
    ,f.[ITEM_CAT_CODE]            AS [绩效核算大类代码]
    ,f.[ITEM_CAT_NAME]            AS [绩效核算大类名称]
