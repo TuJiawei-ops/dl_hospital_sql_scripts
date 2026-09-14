@@ -1,19 +1,24 @@
 /* ===============================================================================
+  Relative Path : 一次分配/医疗服务项目执行积分.sql
   脚本名称: 医疗服务项目执行积分.sql
   业务说明: 医疗服务项目执行积分基础数据抽取（按 执行科室 × 收费项目 粒度）
             以事实层收费明细为驱动，关联【绩效大类维表】与【各科室收费项目医技护执行划分维表】，
             输出医技护执行比例与医技护三路核算单元映射，供后续执行积分按角色切分使用。
             剔除绩效大类: 1101(出入院服务类)、1041(诊察类)
   数据流向: dbo.[PF临时医疗服务项目26A] (事实层, 别名 a)
-            INNER JOIN dbo.[DIM_PRF_ITEM_RVU_VERSION]     (维度层, 别名 v, 版本快照收敛)
+            LEFT  JOIN dbo.[sjjk_bmb_2025_06_01]          (部门字典桥接层, 别名 d, id → 编码)
+            INNER JOIN dbo.[DIM_PRF_ITEM_RVU_VERSION]     (维度层, 别名 v, 绩效大类)
             LEFT  JOIN dbo.[DIM_DEPT_ITEM_EXEC_RATIO]     (维度层, 别名 r, 仅取 IS_ENABLED = 1)
 
   ── 依赖契约 ──
   事实表 : dbo.[PF临时医疗服务项目26A]
            [项目代码] NVARCHAR(60) / [项目名称] NVARCHAR(600)
            [执行科室代码] BIGINT / [执行科室] NVARCHAR(300)
-           [开单科室代码] BIGINT / [开单科室] NVARCHAR(300)
            [数量] [单价] [金额] DECIMAL(18,8) / [执行时间] DATETIME
+  桥接表 : dbo.[sjjk_bmb_2025_06_01]（部门字典表, 表级注释「部门表」）
+           主键 [id] BIGINT 聚簇；[编码] nvarchar(10) NOT NULL
+           [名称] nvarchar(100) / [建档时间] datetime / [撤档时间] datetime
+           该表为事实层数值主键 [执行科室代码] 与维表业务编码 [HIS_DEPT_CODE] 的唯一桥接通道。
   维表 A : dbo.[DIM_PRF_ITEM_RVU_VERSION]（绩效大类来源）
            主键 (ORG_CODE, VERSION_NO, PROJ_CODE, MEAS_UNIT)——本脚本按系统单版本假设，
            不使用 VERSION_NO / ORG_CODE 做开窗收敛，仅按 PROJ_CODE 做 MAX() 拉平
@@ -26,23 +31,32 @@
            [DOC_HPS_DEPT_NAME] [TECH_HPS_DEPT_NAME] [NURSE_HPS_DEPT_NAME] NVARCHAR(300)
 
   ── 关键纠偏（防熵增） ──
-  1. 维表 A 按系统单版本假设直接抽取，不再做 VERSION_NO 开窗收敛；
+  1. 【主键血缘修复】事实层 [执行科室代码] 存储的是部门字典表物理主键 [id]（BIGINT, 如 100241），
+     而维表 B [HIS_DEPT_CODE] 存储的是业务编码（如 '0102'）。二者语义不同层级，
+     直接字符串化比对将 100% 漏配，导致全部执行比例与医技护三路核算单元退化为 NULL 兜底。
+     故必须引入部门字典表 sjjk_bmb_2025_06_01 做桥接：
+     事实层 [执行科室代码] ──(id = id)──▶ 字典层 [编码] ──▶ 作为 EXEC_DEPT_CODE_KEY 与维表 B 匹配。
+  2. 字典关联采用 INNER JOIN：字典未命中即意味着该执行科室缺少业务编码，
+     下游维表必然无法匹配，此类行对执行积分切分无贡献价值，提前剪枝减少无效链路开销。
+  3. 维表 A 按系统单版本假设直接抽取，不再做 VERSION_NO 开窗收敛；
      仍保留按 PROJ_CODE 的 MAX() 拉平（防多计费单位/多机构分支造成行级放大）。
-  2. 维表 B 的生效唯一键为 (HIS_DEPT_CODE, ITEM_CODE) 且受 IS_ENABLED = 1 过滤唯一索引约束，
+  4. 维表 B 的生效唯一键为 (HIS_DEPT_CODE, ITEM_CODE) 且受 IS_ENABLED = 1 过滤唯一索引约束，
      故 LEFT JOIN 在启用态下天然 1:1，不会放大行数；关联条件中显式携带 r.[IS_ENABLED] = 1，
      避免停用历史行参与匹配。
-  3. 类型安全：事实层 [执行科室代码] 为 BIGINT，维表 B [HIS_DEPT_CODE] 为 VARCHAR(60)。
-     关联时按「源列零改造优先」的反向适用原则做一次性字符串化：
-     CAST(a.[执行科室代码] AS VARCHAR(60))。宽度锁定 VARCHAR(60) 与目标列声明宽度一一对齐，
-     严禁窄化截断，严禁转回数值型比较。
-  4. 过滤条件收敛于 dim_version_scope 层（v.[ITEM_CAT_CODE] NOT IN ('1101','1041')），
+  5. 类型安全：字典层 [编码] 为 nvarchar(10)，维表 B [HIS_DEPT_CODE] 为 VARCHAR(60)。
+     桥接输出统一做一次性字符串化 CAST(d.[编码] AS VARCHAR(60))，宽度锁定 VARCHAR(60)
+     与目标列声明宽度一一对齐，严禁窄化截断至 nvarchar(10) 造成长编码静默截断。
+     关联两侧均为原生字符串，业务编码前导零（如 '0102'）零丢失。
+  6. 过滤条件收敛于 dim_version_scope 层（v.[ITEM_CAT_CODE] NOT IN ('1101','1041')），
      在 JOIN 之前完成剪枝，杜绝无效行进入关联链路。
-  5. 医技护三路核算单元映射与执行比例均可能为 NULL（未配置规则行），
+  7. 医技护三路核算单元映射与执行比例均可能为 NULL（未配置规则行），
      比例列统一 ISNULL 兜底 0.00000000（与 .clinerules 第 7 节精度规范同源）；
      核算单元映射列保留 NULL 原值不做字符兜底，由下游按缺失语义显式判定，
      防止 'UNKNOWN' 与真实编码混淆。
-  6. 维表 B 与事实层严格 1:1 左连接，事实层每条收费明细恰产出一行，
+  8. 维表 B 与事实层严格 1:1 左连接，事实层每条收费明细恰产出一行，
      不做任何 GROUP BY 聚合，保持明细粒度以供下游按医技护角色二次切分。
+  9. 【字段裁剪】开单科室（[开单科室代码] / [开单科室]）与执行积分核算口径无关，
+     已从事实层抽取、关联层、收敛层及出口契约中全量移除，杜绝无关维度污染与冗余 I/O。
 
   ── 模板占位符（严禁破坏） ──
   '{year}'      : 核算年份, 4 位数字文本, 默认 '2025'
@@ -57,6 +71,7 @@
   粒度定义   : 事实层收费明细行（执行科室 × 项目代码）
 
   修改日志：
+  2026-09-14 09:50:00 | 关联修复与裁剪 | 彻底移除开单科室代码/名称输出；通过 sjjk_bmb_2025_06_01 桥接事实层 执行科室代码 (id) 与维表 HIS_DEPT_CODE (编码) 的主键关联。
   2026-09-14 07:00:00 | 重构熵减 | 按系统单版本假设，移除 VERSION_NO 窗口函数收敛逻辑，降低计算熵值与算子开销：
                                  彻底删除 dim_latest_version CTE（含 ROW_NUMBER() OVER (PARTITION BY PROJ_CODE, MEAS_UNIT
                                  ORDER BY VERSION_NO DESC) 开窗排序）与 dim_pick 层 VERSION_RANK = 1 过滤；
@@ -73,21 +88,29 @@
 =============================================================================== */
 
 WITH
--- ── Import CTE: 事实层收费明细（执行科室维度开口时间窗，半开区间 月初 至 次月初） ──
+-- ── Import CTE: 部门字典桥接层（事实层数值主键 id → 维表业务编码 编码） ──
+dept_dict AS (
+    SELECT
+        b.[id]                                        AS DEPT_ID,
+        CAST(b.[编码] AS VARCHAR(60))                 AS DEPT_CODE
+    FROM dbo.[sjjk_bmb_2025_06_01] AS b WITH (NOLOCK)
+),
+
+-- ── Import CTE: 事实层收费明细（执行科室通过字典桥接取得业务编码，半开区间 月初 至 次月初） ──
 fact_raw AS (
     SELECT
-        a.[项目代码]                              AS PROJ_CODE,
-        a.[项目名称]                              AS PROJ_NAME,
-        a.[执行科室代码]                          AS EXEC_DEPT_CODE,
-        a.[执行科室]                              AS EXEC_DEPT_NAME,
-        CAST(a.[执行科室代码] AS VARCHAR(60))     AS EXEC_DEPT_CODE_KEY,
-        a.[开单科室代码]                          AS ORDER_DEPT_CODE,
-        a.[开单科室]                              AS ORDER_DEPT_NAME,
-        a.[执行时间]                              AS EXEC_TIME,
-        CAST(a.[数量] AS DECIMAL(18,8))           AS QTY,
-        CAST(a.[单价] AS DECIMAL(18,8))           AS UNIT_PRICE,
-        CAST(a.[金额] AS DECIMAL(18,8))           AS AMOUNT
+        a.[项目代码]                                  AS PROJ_CODE,
+        a.[项目名称]                                  AS PROJ_NAME,
+        a.[执行科室代码]                              AS EXEC_DEPT_ID,
+        a.[执行科室]                                  AS EXEC_DEPT_NAME,
+        d.[DEPT_CODE]                                 AS EXEC_DEPT_CODE_KEY,
+        a.[执行时间]                                  AS EXEC_TIME,
+        CAST(a.[数量] AS DECIMAL(18,8))               AS QTY,
+        CAST(a.[单价] AS DECIMAL(18,8))               AS UNIT_PRICE,
+        CAST(a.[金额] AS DECIMAL(18,8))               AS AMOUNT
     FROM dbo.[PF临时医疗服务项目26A] AS a WITH (NOLOCK)
+    INNER JOIN dept_dict AS d
+        ON a.[执行科室代码] = d.[DEPT_ID]
     WHERE a.[执行时间] >= DATEFROMPARTS(CAST('{year}' AS INT), CAST('{month}' AS INT), 1)
       AND a.[执行时间] <  DATEADD(MONTH, 1, DATEFROMPARTS(CAST('{year}' AS INT), CAST('{month}' AS INT), 1))
 ),
@@ -141,14 +164,12 @@ dim_collapse AS (
 -- ── Logical CTE: 事实 × 绩效大类 × 医技护执行划分 三表关联（明细粒度，不聚合） ──
 joined AS (
     SELECT
-        f.[EXEC_DEPT_CODE],
+        f.[EXEC_DEPT_ID],
         f.[EXEC_DEPT_NAME],
         f.[EXEC_DEPT_CODE_KEY],
-        f.[ORDER_DEPT_CODE],
-        f.[ORDER_DEPT_NAME],
+        f.[EXEC_TIME],
         f.[PROJ_CODE],
         f.[PROJ_NAME],
-        f.[EXEC_TIME],
         f.[QTY],
         f.[UNIT_PRICE],
         f.[AMOUNT],
@@ -178,10 +199,8 @@ final AS (
     SELECT
         CAST('{year}'  AS VARCHAR(10)) AS CALC_YEAR,
         CAST('{month}' AS VARCHAR(10)) AS CALC_MONTH,
-        j.[EXEC_DEPT_CODE],
+        j.[EXEC_DEPT_ID],
         j.[EXEC_DEPT_NAME],
-        j.[ORDER_DEPT_CODE],
-        j.[ORDER_DEPT_NAME],
         j.[PROJ_CODE],
         j.[PROJ_NAME],
         j.[EXEC_TIME],
@@ -202,16 +221,14 @@ final AS (
         j.[NURSE_HPS_DEPT_CODE],
         j.[NURSE_HPS_DEPT_NAME]
     FROM joined AS j
-    WHERE j.[EXEC_DEPT_CODE] IN {struct_codes}
+    WHERE j.[EXEC_DEPT_ID] IN {struct_codes}
 )
 
 SELECT
     f.[CALC_YEAR]                AS [核算年份]
    ,f.[CALC_MONTH]               AS [核算月份]
-   ,f.[EXEC_DEPT_CODE]           AS [执行科室代码]
+   ,f.[EXEC_DEPT_ID]             AS [执行科室代码]
    ,f.[EXEC_DEPT_NAME]           AS [执行科室]
-   ,f.[ORDER_DEPT_CODE]          AS [开单科室代码]
-   ,f.[ORDER_DEPT_NAME]          AS [开单科室]
    ,f.[PROJ_CODE]                AS [项目代码]
    ,f.[PROJ_NAME]                AS [项目名称]
    ,f.[EXEC_TIME]                AS [执行时间]
