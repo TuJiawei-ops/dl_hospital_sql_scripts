@@ -73,25 +73,32 @@
      为杜绝无关维度污染执行积分链路与冗余 I/O，已从维表抽取（dim_version_scope）、
      维度收敛（dim_collapse）、关联层（joined）、final 及出口契约全量移除；
      维表 A 契约中 [DECISION_COFF] 列保留声明以维持 DDL 血缘可追溯性。
+  14.【行转列剪枝】医技护三角色由 CROSS APPLY (VALUES ...) 动态行转列，1 条【科室 × 项目】
+      事实行按角色展开为 1~3 行，并强制剪枝：
+      u.[EXEC_RATIO] > 0.00000000 且 u.[HPS_DEPT_CODE] IS NOT NULL。
+      价值：未配置角色（比例兜底 0）与无核算单元映射的行在出口直接消除，
+      下游无需再写角色 IF 分支判定，核算口径天然对齐【唯有效执行才产生积分】。
+  15.【执行积分口径】[执行积分] = CAST([数量] × [单项RVU点数] × [执行比例] AS DECIMAL(18,8))，
+      在 final 层以行内标量乘法一次性算定，不做二次聚合与精度降级；
+      运算三因子已在 joined 层完成 DECIMAL(18,8) 同精度收敛，杜绝低精度截断累积误差。
+      该列语义为【科室 × 项目 × 角色】粒度工作量，跨角色求和即该项目全部执行积分。
 
   ── 模板占位符（严禁破坏） ──
   '{year}'      : 核算年份, 4 位数字文本, 默认 '2025'
   '{month}'     : 核算月份, 1-12 文本, 默认 '6'
   {struct_codes}: 科室代码过滤集, 英文逗号分隔; 留空则不过滤
-  输出契约   : 执行科室代码 / 执行科室 / 项目代码 / 项目名称 / 数量 / 金额
+  输出契约   : 核算年份 / 核算月份 / 执行科室代码 / 执行科室 / 项目代码 / 项目名称 / 数量 / 金额
                / 绩效核算大类代码 / 绩效核算大类名称 / 单项RVU点数
-               / 医生执行比例 / 技师执行比例 / 护士执行比例
-               / 医生核算单元编码 / 医生核算单元名称
-               / 技师核算单元编码 / 技师核算单元名称
-               / 护士核算单元编码 / 护士核算单元名称
-  粒度定义   : 【执行科室 × 收费项目】聚合粒度
-               GROUP BY (EXEC_DEPT_ID, EXEC_DEPT_NAME, PROJ_CODE, PROJ_NAME)
-               事实层完成预聚合后再进入维度关联链，压降重复明细行数
+               / 执行角色 / 执行比例 / 核算单元编码 / 核算单元名称 / 执行积分
+  粒度定义   : 【执行科室 × 收费项目 × 执行角色】行转列后粒度
+               事实层按 (EXEC_DEPT_ID, EXEC_DEPT_NAME, PROJ_CODE, PROJ_NAME) 完成预聚合后再进入维度关联链；
+               医技护三角色经 CROSS APPLY 行转列，每有效角色恰产出一行。
   【EPOCH】  : BIZ_EPOCH 为账期边界哨兵值（次月 1 日 00:00:00），
                仅用于携带账期信息穿越 CTE 链，供下游做半开区间时点匹配，
                严禁作为业务时点列对外输出，严禁参与聚合或分组。
 
   修改日志：
+  2026-09-14 10:30:00 | 架构重构与积分计算 | 引入 CROSS APPLY 实现医技护角色动态行转列与剪枝，直接计算并输出 [执行积分]；出口契约归一化为单列核算单元与执行角色。
   2026-09-14 10:15:00 | 字段裁剪与规范对齐 | 移除平均单价(AVG_UNIT_PRICE)与诊疗决策系数(DECISION_COFF)字段输出与相关计算逻辑；补齐文件相对路径与链路注释。
   2026-09-14 10:05:00 | 粒度收敛聚合 | 移除 [执行时间] 维度与明细输出；事实层按 (执行科室代码, 执行科室, 项目代码, 项目名称) 进行 GROUP BY 聚合，输出 SUM(数量) 与 SUM(金额)，大幅减少物理行数。
   2026-09-14 09:50:00 | 关联修复与裁剪 | 彻底移除开单科室代码/名称输出；通过 sjjk_bmb_2025_06_01 桥接事实层 执行科室代码 (id) 与维表 HIS_DEPT_CODE (编码) 的主键关联。
@@ -187,7 +194,8 @@ dim_collapse AS (
     GROUP BY d.[PROJ_CODE]
 ),
 
--- ── Logical CTE: 事实(聚合) × 绩效大类 × 医技护执行划分 关联（【执行科室 × 项目】粒度） ──
+-- ── Logical CTE: 事实(聚合) × 绩效大类 × 医技护执行划分 关联（【执行科室 × 项目】粒度，
+--              此层维持宽表三角色并列，供 final 层 CROSS APPLY 行转列消费） ──
 joined AS (
     SELECT
         DATEADD(MONTH, 1, DATEFROMPARTS(CAST('{year}' AS INT), CAST('{month}' AS INT), 1)) AS BIZ_EPOCH,
@@ -218,8 +226,8 @@ joined AS (
        AND f.[PROJ_CODE]          = x.[ITEM_CODE]
 ),
 
--- ── Final CTE: 出口契约（执行科室过滤落位于最外层，隔离过滤维度不污染关联链路；
---              已剥离 AVG_UNIT_PRICE 派生运算与 DECISION_COFF 透传，出口与关联链严格同列） ──
+-- ── Final CTE: 出口契约（医技护三角色经 CROSS APPLY 动态行转列，1 行拆为 1~3 行）
+--              过滤落位于 final 层，同时完成：科室过滤 + 有效角色剪枝 + 执行积分标量算定 ──
 final AS (
     SELECT
         CAST('{year}'  AS VARCHAR(10)) AS CALC_YEAR,
@@ -234,17 +242,21 @@ final AS (
         j.[ITEM_CAT_CODE],
         j.[ITEM_CAT_NAME],
         j.[RVU_VAL],
-        j.[DOC_EXEC_RATIO],
-        j.[TECH_EXEC_RATIO],
-        j.[NURSE_EXEC_RATIO],
-        j.[DOC_HPS_DEPT_CODE],
-        j.[DOC_HPS_DEPT_NAME],
-        j.[TECH_HPS_DEPT_CODE],
-        j.[TECH_HPS_DEPT_NAME],
-        j.[NURSE_HPS_DEPT_CODE],
-        j.[NURSE_HPS_DEPT_NAME]
+        u.[ROLE_NAME]                                                                AS EXEC_ROLE,
+        CAST(u.[EXEC_RATIO] AS DECIMAL(18,8))                                        AS EXEC_RATIO,
+        u.[HPS_DEPT_CODE],
+        u.[HPS_DEPT_NAME],
+        CAST(j.[QTY] * j.[RVU_VAL] * u.[EXEC_RATIO] AS DECIMAL(18,8))                AS EXEC_POINTS
     FROM joined AS j
+    CROSS APPLY (
+        VALUES
+            ('医生', j.[DOC_EXEC_RATIO],   j.[DOC_HPS_DEPT_CODE],   j.[DOC_HPS_DEPT_NAME]),
+            ('技师', j.[TECH_EXEC_RATIO],  j.[TECH_HPS_DEPT_CODE],  j.[TECH_HPS_DEPT_NAME]),
+            ('护士', j.[NURSE_EXEC_RATIO], j.[NURSE_HPS_DEPT_CODE], j.[NURSE_HPS_DEPT_NAME])
+    ) AS u([ROLE_NAME], [EXEC_RATIO], [HPS_DEPT_CODE], [HPS_DEPT_NAME])
     WHERE j.[EXEC_DEPT_ID] IN {struct_codes}
+      AND u.[EXEC_RATIO] > CAST(0.00000000 AS DECIMAL(18,8))
+      AND u.[HPS_DEPT_CODE] IS NOT NULL
 )
 
 SELECT
@@ -259,14 +271,10 @@ SELECT
    ,f.[ITEM_CAT_CODE]            AS [绩效核算大类代码]
    ,f.[ITEM_CAT_NAME]            AS [绩效核算大类名称]
    ,f.[RVU_VAL]                  AS [单项RVU点数]
-   ,f.[DOC_EXEC_RATIO]           AS [医生执行比例]
-   ,f.[TECH_EXEC_RATIO]          AS [技师执行比例]
-   ,f.[NURSE_EXEC_RATIO]         AS [护士执行比例]
-   ,f.[DOC_HPS_DEPT_CODE]        AS [医生核算单元编码]
-   ,f.[DOC_HPS_DEPT_NAME]        AS [医生核算单元名称]
-   ,f.[TECH_HPS_DEPT_CODE]       AS [技师核算单元编码]
-   ,f.[TECH_HPS_DEPT_NAME]       AS [技师核算单元名称]
-   ,f.[NURSE_HPS_DEPT_CODE]      AS [护士核算单元编码]
-   ,f.[NURSE_HPS_DEPT_NAME]      AS [护士核算单元名称]
+   ,f.[EXEC_ROLE]                AS [执行角色]
+   ,f.[EXEC_RATIO]               AS [执行比例]
+   ,f.[HPS_DEPT_CODE]            AS [核算单元编码]
+   ,f.[HPS_DEPT_NAME]            AS [核算单元名称]
+   ,f.[EXEC_POINTS]              AS [执行积分]
 FROM final AS f;
 
