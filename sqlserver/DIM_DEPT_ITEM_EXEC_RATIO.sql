@@ -10,6 +10,11 @@
 --           编码类字段（HIS_DEPT_CODE / ITEM_CODE / HPS_DEPT_CODE）全量 VARCHAR 字符串语义，严禁 CAST 为数值型防前导零丢失。
 -- 索引策略：唯一性由 IS_ENABLED = 1 过滤唯一索引在逻辑层强制约束；检索路径另设项目维度索引与核算单元维度联合索引。
 -- 修改日志：
+-- 2026-09-14 02:00:00 | 字段扩展 | 业务时间与留痕区域新增 [DISABLE_DATE] DATETIME NULL 停用日期列（置于 [ITEM_ADD_DATE] 之后），
+--                                    补齐 SCD Type 2 版本保留模型的生效区间右端点，使 (PROVIDE_DATE → DISABLE_DATE) 构成完整业务生效区间；
+--                                    纠偏仅凭 IS_ENABLED + UPDATE_TIME 的半失真停用标记：避免运维侧对废弃行做任何更新（如改备注）
+--                                    覆盖 UPDATE_TIME 后，历史核算周期回溯无法判定规则真实停用日期；
+--                                    追加字段级扩展属性注释，并同步更新表级与 IS_ENABLED 字段注释的生效区间语义说明。
 -- 2026-09-14 01:00:00 | 字段扩展 | 核算单元映射区域新增 [HPS_DEPT_CODE] VARCHAR(60) NULL 编码列（置于 [HPS_DEPT_NAME] 之前），
 --                                    表示对应核算单元编码，遵循第 7.1 节编码字段强制字符串规范（严禁 CAST 为数值型防前导零丢失）；
 --                                    原 HPS_DEPT_NAME 单列检索索引升级为 (HPS_DEPT_CODE, HPS_DEPT_NAME) 联合检索索引并同步更名，
@@ -46,6 +51,7 @@ CREATE TABLE [dbo].[DIM_DEPT_ITEM_EXEC_RATIO] (
     -- ===== 业务时间与留痕 =====
     [PROVIDE_DATE]          DATETIME            NULL,       -- 提供日期
     [ITEM_ADD_DATE]         DATETIME            NULL,       -- 项目新增日期
+    [DISABLE_DATE]          DATETIME            NULL,       -- 停用日期（规则被标记为停用时的业务终止时间）
     [REMARK]                NVARCHAR(1000)      NULL,       -- 备注
     [VERSION_NO]            INT                 NOT NULL
         CONSTRAINT [DF_DIM_DEPT_ITEM_EXEC_RATIO_VER]   DEFAULT (1),          -- 版本号（仅做记录，不参与主键寻址）
@@ -81,7 +87,7 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE [name] = N'IX_DIM_DEPT_ITEM_EXEC_
 -- =================================================================
 
 EXEC sp_addextendedproperty
-    @name = N'MS_Description', @value = N'各科室收费项目医技护执行划分维表（HIS 科室 × 收费项目 → 医生/技师/护士执行比例切分）。主键为 ID 自增代理列，业务唯一性由 IS_ENABLED = 1 过滤唯一索引在逻辑层强制约束。',
+    @name = N'MS_Description', @value = N'各科室收费项目医技护执行划分维表（HIS 科室 × 收费项目 → 医生/技师/护士执行比例切分）。主键为 ID 自增代理列，业务唯一性由 IS_ENABLED = 1 过滤唯一索引在逻辑层强制约束。业务生效区间由 PROVIDE_DATE → DISABLE_DATE 表达（SCD Type 2 版本保留模型），IS_ENABLED 为该区间的当前逻辑状态投影。',
     @level0type = N'SCHEMA', @level0name = N'dbo',
     @level1type = N'TABLE',  @level1name = N'DIM_DEPT_ITEM_EXEC_RATIO';
 
@@ -124,13 +130,16 @@ EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'提供日期',
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'项目新增日期',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DIM_DEPT_ITEM_EXEC_RATIO', @level2type = N'COLUMN', @level2name = N'ITEM_ADD_DATE';
 
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'停用日期（规则被标记为停用时的业务终止时间，SCD Type 2 生效区间的右端点；启用中为 NULL，与 IS_ENABLED = 0 严格联动）',
+    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DIM_DEPT_ITEM_EXEC_RATIO', @level2type = N'COLUMN', @level2name = N'DISABLE_DATE';
+
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'备注',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DIM_DEPT_ITEM_EXEC_RATIO', @level2type = N'COLUMN', @level2name = N'REMARK';
 
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'版本号（仅做记录留痕，不参与主键寻址与物理唯一约束）',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DIM_DEPT_ITEM_EXEC_RATIO', @level2type = N'COLUMN', @level2name = N'VERSION_NO';
 
-EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'是否启用（1:启用, 0:停用；仅在 IS_ENABLED = 1 时参与 (HIS_DEPT_CODE, ITEM_CODE) 过滤唯一性校验）',
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'是否启用（1:启用, 0:停用；当前逻辑状态投影，与 DISABLE_DATE 严格联动：IS_ENABLED = 0 时 DISABLE_DATE 必须非空；仅在 IS_ENABLED = 1 时参与 (HIS_DEPT_CODE, ITEM_CODE) 过滤唯一性校验）',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DIM_DEPT_ITEM_EXEC_RATIO', @level2type = N'COLUMN', @level2name = N'IS_ENABLED';
 
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'记录创建时间',
