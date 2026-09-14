@@ -39,6 +39,9 @@ CREATE TABLE [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
     [PROJ_NAME]             NVARCHAR(600)       NULL,       -- 医疗项目/考核指标名称
     [ITEM_CAT_CODE]         NVARCHAR(60)        NULL,       -- 绩效核算大类代码（如 1101/1041 等）
     [ITEM_CAT_NAME]         NVARCHAR(200)       NULL,       -- 绩效核算大类名称
+    -- ===== 执行角色维度 =====
+    [EXEC_ROLE]             NVARCHAR(20)        NOT NULL
+        CONSTRAINT [DF_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_EXEC_ROLE] DEFAULT (N'NONE'), -- 执行角色（医生/技师/护士，非角色切分项默认 'NONE'）
     -- ===== 最终值与审计 =====
     [FINAL_VALUE_TYPE]      NVARCHAR(20)        NOT NULL
         CONSTRAINT [DF_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_VALUE_TYPE] DEFAULT (N'SCORE'), -- 最终值口径：SCORE 积分 / AMOUNT 金额 / INDEX 指数
@@ -54,7 +57,7 @@ CREATE TABLE [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
     CONSTRAINT [PK_DWD_FIN_CALC_ALLOC1_DETAIL_LOG] PRIMARY KEY CLUSTERED ([ID] ASC),
     -- 一次分配业务唯一键（基于 核算单元 + 项目 锁死幂等重跑与防重锚点）
     CONSTRAINT [UQ_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_BIZ]
-        UNIQUE NONCLUSTERED ([CALC_YEAR] ASC, [CALC_MONTH] ASC, [ITEM_CODE] ASC, [UNIT_CODE] ASC, [PROJ_CODE] ASC)
+        UNIQUE NONCLUSTERED ([CALC_YEAR] ASC, [CALC_MONTH] ASC, [ITEM_CODE] ASC, [UNIT_CODE] ASC, [PROJ_CODE] ASC, [EXEC_ROLE] ASC)
 );
 
 -- 账期 + 核算项检索索引
@@ -116,6 +119,9 @@ EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'绩效核算�
 
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'绩效核算大类名称',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_ALLOC1_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'ITEM_CAT_NAME';
+
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'执行角色（医生/技师/护士，非角色切分核算项默认 NONE）',
+    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_ALLOC1_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'EXEC_ROLE';
 
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'最终值口径：SCORE 积分 / AMOUNT 金额 / INDEX 指数（防口径歧义）',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_ALLOC1_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'FINAL_VALUE_TYPE';
