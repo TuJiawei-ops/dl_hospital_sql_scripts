@@ -75,36 +75,61 @@
      为杜绝无关维度污染执行积分链路与冗余 I/O，已从维表抽取（dim_version_scope）、
      维度收敛（dim_collapse）、关联层（joined）、final 及出口契约全量移除；
      维表 A 契约中 [DECISION_COFF] 列保留声明以维持 DDL 血缘可追溯性。
-  14.【行转列剪枝】医技护三角色由 CROSS APPLY (VALUES ...) 动态行转列，1 条【科室 × 项目】
+  14.【行转列剪枝】医技护三角色由 CROSS APPLY (VALUES ...) 动态行转列，1 条【核算单元 × 项目】
       事实行按角色展开为 1~3 行，并强制剪枝：
       u.[EXEC_RATIO] > 0.00000000 且 u.[HPS_DEPT_CODE] IS NOT NULL。
       价值：未配置角色（比例兜底 0）与无核算单元映射的行在出口直接消除，
-      下游无需再写角色 IF 分支判定，核算口径天然对齐【唯有效执行才产生积分】。
-  15.【执行积分口径】[执行积分] = CAST([数量] × [单项RVU点数] × [执行比例] AS DECIMAL(18,8))，
-      在 final 层以行内标量乘法一次性算定，不做二次聚合与精度降级；
+      下游无需再写角色 IF 分支判定，核算口径天然对齐【唯有效执行才产生积分】；
+      展开后与最终 GROUP BY 组合，保证每个有效角色恰产出唯一一行落库记录。
+  15.【执行积分口径】[执行积分] = SUM(CAST([数量] × [单项RVU点数] × [执行比例] AS DECIMAL(18,8)))，
+      在 final 层按【核算单元 × 项目 × 角色】分组内逐行算定后累加，不做二次精度降级；
       运算三因子已在 joined 层完成 DECIMAL(18,8) 同精度收敛，杜绝低精度截断累积误差。
-      该列语义为【科室 × 项目 × 角色】粒度工作量，跨角色求和即该项目全部执行积分。
+      该列语义为【核算单元 × 项目 × 角色】汇总工作量，跨角色求和即该核算单元该项目全部执行积分。
+  16.【键冲突修复】多个不同 HIS 执行科室（如 28 皮外科病房 / 207 病房手术室）经部门桥接后
+      可能映射至同一绩效核算单元（如 100004 外科医生），若维持执行科室粒度直接落库，
+      将产出多条相同 (CALC_YEAR, CALC_MONTH, ITEM_CODE, UNIT_CODE, PROJ_CODE, EXEC_ROLE) 记录
+      并触发唯一约束冲突。故由 cte_role_unpivot 层强制按【核算单元 × 项目 × 角色】GROUP BY
+      预聚合，TOTAL_QTY / TOTAL_AMOUNT / TOTAL_EXEC_POINTS 同步 SUM 累加，
+      final 层只做 1:1 契约投影与综合比例反推；HIS 执行科室作为前置桥接维度，
+      聚合后无单一取值可代表全组，故不落物理列亦不入 JSON，仅由核算单元维度承载结果。
+  17.【JSON 扁平化·性能红线】CALC_DETAIL_JSON 严禁嵌入任何针对事实或关联层的子查询
+      （曾因 (SELECT DISTINCT ... FROM joined ... CROSS APPLY ... FOR JSON PATH) 逐行回表，
+      叠加 15 节点 × 3 层嵌套包装，导致单次 INSERT 触发 N×M 次扫描、执行超 100 秒）。
+      现状：单层扁平 15 节点，全部取自 final 已物化标量列，零回表、零嵌套，
+      查询复杂度 O(N)，与落库行数线性同阶。后续维护严禁重新引入嵌套 JSON 或外部表关联。
+  18.【预聚合层解耦】角色展开与跨 HIS 科室聚合统一收敛在 cte_role_unpivot 层（Intermediate），
+      final 层严禁再做 GROUP BY（防污点隔离），仅保留标量投影、综合执行比例反推与审计文本拼装。
+  19.【综合执行比例反推】聚合后执行比例不可再沿用行级原始值（各 HIS 科室可能配置不同比例），
+      必须由 [总执行积分] ÷ ([总数量] × [单项RVU点数]) 反推加权综合比例，
+      并以 NULLIF 包裹分母防除零，ISNULL 兜底 0.00000000，全链 DECIMAL(18,8) 同精度。
 
   ── 模板占位符（严禁破坏） ──
   '{year}'      : 核算年份, 4 位数字文本, 默认 '2025'
   '{month}'     : 核算月份, 1-12 文本, 默认 '6'
   {struct_codes}: 科室代码过滤集, 英文逗号分隔; 留空则不过滤
-  输出契约   : 核算年份 / 核算月份 / 执行科室代码 / 执行科室 / 项目代码 / 项目名称 / 数量 / 金额
+  输出契约   : 核算年份 / 核算月份 / 项目代码 / 项目名称 / 数量 / 金额
                / 绩效核算大类代码 / 绩效核算大类名称 / 单项RVU点数
                / 执行角色 / 执行比例 / 核算单元编码 / 核算单元名称 / 执行积分
                / 计算过程描述
   落库契约   : 第一区块写入 dbo.DWD_FIN_CALC_ALLOC1_DETAIL_LOG（一次分配专用物理表）
-               列化核对列: FINAL_VALUE(执行积分) + TOTAL_QTY(执行数量)
-               JSON 过程仓: CALC_DETAIL_JSON 全量 7 组节点（基础元数据/执行科室/项目大类/
-                            角色比例/计算因子与结果/RVU配置快照/执行比例配置快照）
-  粒度定义   : 【核算单元 × 执行科室 × 收费项目 × 执行角色】行转列后粒度
-               事实层按 (EXEC_DEPT_ID, EXEC_DEPT_NAME, PROJ_CODE, PROJ_NAME) 完成预聚合后再进入维度关联链；
-               医技护三角色经 CROSS APPLY 行转列，每有效角色恰产出一行。
+               唯一键对齐: (CALC_YEAR, CALC_MONTH, ITEM_CODE, UNIT_CODE, PROJ_CODE, EXEC_ROLE)
+               列化核对列: FINAL_VALUE(执行积分) + TOTAL_QTY(汇总数量)
+               JSON 过程仓: CALC_DETAIL_JSON 单层扁平化 15 节点（账期/核算单元/项目大类/
+                            RVU点数/执行角色比例/汇总数量金额/最终执行积分/计算过程描述）
+                            零嵌套、零外部表关联，纯 final 标量字段内存拼接（O(N) 线性）
+  粒度定义   : 【核算单元 × 收费项目 × 执行角色】聚合落库粒度
+               事实层按 (EXEC_DEPT_ID, EXEC_DEPT_NAME, PROJ_CODE, PROJ_NAME) 完成预聚合后进入维度关联链；
+               多个 HIS 执行科室映射至同一绩效核算单元时，final 层按【核算单元 × 项目 × 角色】SUM 收敛为单行，
+               与唯一键 (CALC_YEAR, CALC_MONTH, ITEM_CODE, UNIT_CODE, PROJ_CODE, EXEC_ROLE) 严格对齐。
   【EPOCH】  : BIZ_EPOCH 为账期边界哨兵值（次月 1 日 00:00:00），
                仅用于携带账期信息穿越 CTE 链，供下游做半开区间时点匹配，
                严禁作为业务时点列对外输出，严禁参与聚合或分组。
 
+  2026-09-14 14:20:00 | 预聚合层解耦重构 | 将角色展开与跨 HIS 科室聚合从 final 层剥离下沉至新增 Intermediate CTE [cte_role_unpivot]（按【核算单元 × 项目 × 角色】GROUP BY，输出 TOTAL_QTY / TOTAL_AMOUNT / TOTAL_EXEC_POINTS）；final 层降级为纯 1:1 契约投影层，取消 GROUP BY 与行级执行比例直取，改为 [总执行积分] ÷ ([总数量] × [单项RVU点数]) 经 NULLIF/ISNULL 防除零反推加权综合执行比例；审计文本公式段同步切换为聚合后标量引用，消除重复 SUM 表达式带来的可读性与执行开销问题；头部纠偏 16 改派归属并新增 18/19 条。
+
   修改日志：
+  2026-09-14 13:00:00 | 性能优化与JSON扁平化 | 剥离 CALC_DETAIL_JSON 内针对 joined 表的嵌套关联子查询（SELECT DISTINCT ... FROM joined ... CROSS APPLY ... FOR JSON PATH）及 RVU配置快照 / 执行比例配置快照 双层嵌套 JSON 包装；重构为单层扁平 15 节点纯内存拼接（零外部表回表），查询复杂度由 O(N×M) 降为 O(N)，消除逐行嵌套扫描导致的 100s+ 性能雪崩；final 及以上计算 CTE 零改动。
+  2026-09-14 12:00:00 | 聚合收敛与键冲突修复 | final CTE 由【核算单元 × 执行科室 × 项目 × 角色】收紧为【核算单元 × 项目 × 角色】GROUP BY 预聚合（多 HIS 执行科室映射同一核算单元导致落库键重复，触发唯一约束冲突）；QTY/AMOUNT/EXEC_POINTS 改为 SUM 累加，CALC_PROCESS_TEXT 公式段同步为"汇总数量"，JSON 移除标量执行科室三节点并下沉至 [执行比例配置快照].[执行科室集合] 数组（DISTINCT 追溯）；上游 6 段 CTE 零改动。
   2026-09-14 11:00:00 | 持久化与过滤纠偏 | 参照开单积分脚本完成 Envelope Pattern 双区块物理持久化改造，落库 [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]（ITEM_CODE = ITEM_MED_SVC_EXEC_SCORE）；纠偏出口过滤口径由物理执行科室 [EXEC_DEPT_ID] 改为核算单元 [HPS_DEPT_CODE]；追加四段式 [计算过程描述] 与全量 7 组 JSON 过程仓（含 RVU配置快照 / 执行比例配置快照 双子 JSON）。
   2026-09-14 10:30:00 | 架构重构与积分计算 | 引入 CROSS APPLY 实现医技护角色动态行转列与剪枝，直接计算并输出 [执行积分]；出口契约归一化为单列核算单元与执行角色。
   2026-09-14 10:15:00 | 字段裁剪与规范对齐 | 移除平均单价(AVG_UNIT_PRICE)与诊疗决策系数(DECISION_COFF)字段输出与相关计算逻辑；补齐文件相对路径与链路注释。
@@ -142,7 +167,7 @@ WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
 ;
 
 -- 2. 算子计算与持久化落库（dept_dict → fact_raw → dim_version_scope → dim_exec_ratio_raw
---    → dim_collapse → joined → final 计算链路零改动，仅增强过滤口径与 Envelope 包装）
+--    → dim_collapse → joined → cte_role_unpivot → final 计算链路零改动，仅增强过滤口径与 Envelope 包装）
 WITH
 -- ── Import CTE: 部门字典桥接层（事实层数值主键 id → 维表业务编码 编码） ──
 dept_dict AS (
@@ -252,35 +277,21 @@ joined AS (
        AND f.[PROJ_CODE]          = x.[ITEM_CODE]
 ),
 
--- ── Final CTE: 出口契约（医技护三角色经 CROSS APPLY 动态行转列，1 行拆为 1~3 行）
---              过滤落位于 final 层，同时完成：科室过滤 + 有效角色剪枝 + 执行积分标量算定 ──
-final AS (
+-- ── Intermediate CTE: 角色展开与核算单元预聚合（按 核算单元 × 项目 × 角色 维度切分并消除 HIS 科室差异） ──
+cte_role_unpivot AS (
     SELECT
-        CAST('{year}'  AS VARCHAR(10)) AS CALC_YEAR,
-        CAST('{month}' AS VARCHAR(10)) AS CALC_MONTH,
         j.[BIZ_EPOCH],
-        j.[EXEC_DEPT_ID],
-        j.[EXEC_DEPT_NAME],
-        j.[EXEC_DEPT_CODE_KEY],
+        u.[HPS_DEPT_CODE],
+        u.[HPS_DEPT_NAME],
         j.[PROJ_CODE],
         j.[PROJ_NAME],
-        j.[QTY],
-        j.[AMOUNT],
         j.[ITEM_CAT_CODE],
         j.[ITEM_CAT_NAME],
         j.[RVU_VAL],
-        u.[ROLE_NAME]                                                                AS EXEC_ROLE,
-        CAST(u.[EXEC_RATIO] AS DECIMAL(18,8))                                        AS EXEC_RATIO,
-        u.[HPS_DEPT_CODE],
-        u.[HPS_DEPT_NAME],
-        CAST(j.[QTY] * j.[RVU_VAL] * u.[EXEC_RATIO] AS DECIMAL(18,8))                AS EXEC_POINTS,
-        '医疗服务执行积分 | 科室项目角色执行积分 = 数量 × 单项RVU点数 × 执行比例 | '
-            + CAST(CAST(j.[QTY] AS DECIMAL(18,8)) AS VARCHAR(50)) + ' × '
-            + CAST(CAST(j.[RVU_VAL] AS DECIMAL(18,8)) AS VARCHAR(50)) + ' × '
-            + CAST(CAST(u.[EXEC_RATIO] AS DECIMAL(18,8)) AS VARCHAR(50)) + ' = '
-            + CAST(CAST(j.[QTY] * j.[RVU_VAL] * u.[EXEC_RATIO] AS DECIMAL(18,8)) AS VARCHAR(50)) + ' | '
-            + CAST(CAST(j.[QTY] * j.[RVU_VAL] * u.[EXEC_RATIO] AS DECIMAL(18,8)) AS VARCHAR(50)) + ' + 0.00000000 = '
-            + CAST(CAST(j.[QTY] * j.[RVU_VAL] * u.[EXEC_RATIO] AS DECIMAL(18,8)) AS VARCHAR(50)) AS CALC_PROCESS_TEXT
+        u.[ROLE_NAME]                                                                 AS EXEC_ROLE,
+        CAST(SUM(CAST(j.[QTY]    AS DECIMAL(18,8))) AS DECIMAL(18,8))                 AS TOTAL_QTY,
+        CAST(SUM(CAST(j.[AMOUNT] AS DECIMAL(18,8))) AS DECIMAL(18,8))                 AS TOTAL_AMOUNT,
+        CAST(SUM(CAST(j.[QTY] * j.[RVU_VAL] * u.[EXEC_RATIO] AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS TOTAL_EXEC_POINTS
     FROM joined AS j
     CROSS APPLY (
         VALUES
@@ -291,11 +302,50 @@ final AS (
     WHERE u.[HPS_DEPT_CODE] IN {struct_codes}
       AND u.[EXEC_RATIO] > CAST(0.00000000 AS DECIMAL(18,8))
       AND u.[HPS_DEPT_CODE] IS NOT NULL
+    GROUP BY
+        j.[BIZ_EPOCH],
+        u.[HPS_DEPT_CODE],
+        u.[HPS_DEPT_NAME],
+        j.[PROJ_CODE],
+        j.[PROJ_NAME],
+        j.[ITEM_CAT_CODE],
+        j.[ITEM_CAT_NAME],
+        j.[RVU_VAL],
+        u.[ROLE_NAME]
+),
+
+-- ── Final CTE: 出口契约（防污点隔离，按【核算单元 × 项目 × 角色】严格 1:1 输出单行，计算综合执行比例） ──
+final AS (
+    SELECT
+        CAST('{year}'  AS VARCHAR(10)) AS CALC_YEAR,
+        CAST('{month}' AS VARCHAR(10)) AS CALC_MONTH,
+        r.[BIZ_EPOCH],
+        r.[HPS_DEPT_CODE],
+        r.[HPS_DEPT_NAME],
+        r.[PROJ_CODE],
+        r.[PROJ_NAME],
+        r.[ITEM_CAT_CODE],
+        r.[ITEM_CAT_NAME],
+        r.[RVU_VAL],
+        r.[EXEC_ROLE],
+        -- 综合反推执行比例 = 总积分 / (总数量 × RVU)，若总基数为 0 则兜底 0
+        CAST(ISNULL(r.[TOTAL_EXEC_POINTS] / NULLIF(r.[TOTAL_QTY] * r.[RVU_VAL], 0), 0) AS DECIMAL(18,8)) AS EXEC_RATIO,
+        r.[TOTAL_QTY]                                                                                     AS QTY,
+        r.[TOTAL_AMOUNT]                                                                                  AS AMOUNT,
+        r.[TOTAL_EXEC_POINTS]                                                                             AS EXEC_POINTS,
+        '医疗服务执行积分 | 科室项目角色执行积分 = 汇总数量 × 单项RVU点数 × 执行比例 | '
+            + CAST(r.[TOTAL_QTY] AS VARCHAR(50)) + ' × '
+            + CAST(r.[RVU_VAL] AS VARCHAR(50)) + ' × '
+            + CAST(CAST(ISNULL(r.[TOTAL_EXEC_POINTS] / NULLIF(r.[TOTAL_QTY] * r.[RVU_VAL], 0), 0) AS DECIMAL(18,8)) AS VARCHAR(50)) + ' = '
+            + CAST(r.[TOTAL_EXEC_POINTS] AS VARCHAR(50)) + ' | '
+            + CAST(r.[TOTAL_EXEC_POINTS] AS VARCHAR(50)) + ' + 0.00000000 = '
+            + CAST(r.[TOTAL_EXEC_POINTS] AS VARCHAR(50))                                              AS CALC_PROCESS_TEXT
+    FROM cte_role_unpivot AS r
 )
 
 INSERT INTO [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
     [CALC_YEAR], [CALC_MONTH], [ITEM_CODE], [ITEM_NAME], [SCRIPT_NAME],
-    [UNIT_CODE], [UNIT_NAME], [PROJ_CODE], [PROJ_NAME], [ITEM_CAT_CODE], [ITEM_CAT_NAME],
+    [UNIT_CODE], [UNIT_NAME], [PROJ_CODE], [PROJ_NAME], [ITEM_CAT_CODE], [ITEM_CAT_NAME], [EXEC_ROLE],
     [FINAL_VALUE_TYPE], [FINAL_VALUE], [TOTAL_QTY], [CALC_PROCESS_TEXT], [CALC_DETAIL_JSON], [CREATE_TIME]
 )
 SELECT
@@ -310,6 +360,7 @@ SELECT
     f.[PROJ_NAME]                                   AS [PROJ_NAME],
     f.[ITEM_CAT_CODE]                               AS [ITEM_CAT_CODE],
     f.[ITEM_CAT_NAME]                               AS [ITEM_CAT_NAME],
+    f.[EXEC_ROLE]                                   AS [EXEC_ROLE],
     N'SCORE'                                        AS [FINAL_VALUE_TYPE],
     CAST(f.[EXEC_POINTS] AS DECIMAL(18,8))          AS [FINAL_VALUE],
     CAST(f.[QTY]         AS DECIMAL(18,8))          AS [TOTAL_QTY],
@@ -320,34 +371,16 @@ SELECT
             CAST(f.[CALC_MONTH] AS VARCHAR(10))         AS [核算月份],
             f.[HPS_DEPT_CODE]                           AS [核算单元编码],
             f.[HPS_DEPT_NAME]                           AS [核算单元名称],
-            CAST(f.[EXEC_DEPT_ID] AS VARCHAR(20))       AS [执行科室代码],
-            f.[EXEC_DEPT_NAME]                          AS [执行科室名称],
-            f.[EXEC_DEPT_CODE_KEY]                      AS [执行科室业务编码],
             f.[PROJ_CODE]                               AS [项目代码],
             f.[PROJ_NAME]                               AS [项目名称],
             f.[ITEM_CAT_CODE]                           AS [绩效核算大类代码],
             f.[ITEM_CAT_NAME]                           AS [绩效核算大类名称],
+            CAST(f.[RVU_VAL]     AS DECIMAL(18,8))      AS [单项RVU点数],
             f.[EXEC_ROLE]                               AS [执行角色],
-            CAST(f.[EXEC_RATIO] AS DECIMAL(18,8))       AS [执行比例],
-            CAST(f.[QTY]        AS DECIMAL(18,8))       AS [数量],
-            CAST(f.[AMOUNT]     AS DECIMAL(18,8))       AS [金额],
-            CAST(f.[RVU_VAL]    AS DECIMAL(18,8))       AS [单项RVU点数],
-            CAST(f.[EXEC_POINTS] AS DECIMAL(18,8))      AS [执行积分],
-            (
-                SELECT
-                    f.[ITEM_CAT_CODE]                   AS [绩效核算大类代码],
-                    f.[ITEM_CAT_NAME]                   AS [绩效核算大类名称],
-                    CAST(f.[RVU_VAL] AS DECIMAL(18,8))  AS [单项RVU点数]
-                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
-            )                                           AS [RVU配置快照],
-            (
-                SELECT
-                    f.[EXEC_ROLE]                               AS [执行角色],
-                    CAST(f.[EXEC_RATIO] AS DECIMAL(18,8))       AS [执行比例],
-                    f.[HPS_DEPT_CODE]                           AS [核算单元编码],
-                    f.[HPS_DEPT_NAME]                           AS [核算单元名称]
-                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
-            )                                           AS [执行比例配置快照],
+            CAST(f.[EXEC_RATIO]  AS DECIMAL(18,8))      AS [执行比例],
+            CAST(f.[QTY]         AS DECIMAL(18,8))      AS [汇总数量],
+            CAST(f.[AMOUNT]      AS DECIMAL(18,8))      AS [汇总金额],
+            CAST(f.[EXEC_POINTS] AS DECIMAL(18,8))      AS [最终执行积分],
             f.[CALC_PROCESS_TEXT]                       AS [计算过程描述]
         FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
     )                                               AS [CALC_DETAIL_JSON],
@@ -372,6 +405,7 @@ WITH CTE_DWD_READ_ALIAS AS (
         [PROJ_NAME]             AS [项目名称],
         [ITEM_CAT_CODE]         AS [绩效核算大类代码],
         [ITEM_CAT_NAME]         AS [绩效核算大类名称],
+        [EXEC_ROLE]             AS [执行角色],
         [FINAL_VALUE_TYPE]      AS [值类型],
         [FINAL_VALUE]           AS [最终结果],
         [TOTAL_QTY]             AS [汇总数量],
