@@ -7,9 +7,17 @@
 -- 架构说明：不采用 (HIS_DEPT_CODE, ITEM_CODE) 纯复合主键——版本变更或停用重建时复合主键会阻塞历史废弃行保留；
 --           亦不引入 (…, VERSION_NO) 复合主键——徒增外键关联与 ORM 映射复杂度，版本变更仅由 VERSION_NO 记录留痕。
 -- 精度规范：三个执行比例物理精度锁死 DECIMAL(18,8)，默认 0.00000000 兜底；
---           编码类字段（HIS_DEPT_CODE / ITEM_CODE / HPS_DEPT_CODE）全量 VARCHAR 字符串语义，严禁 CAST 为数值型防前导零丢失。
--- 索引策略：唯一性由 IS_ENABLED = 1 过滤唯一索引在逻辑层强制约束；检索路径另设项目维度索引与核算单元维度联合索引。
+--           编码类字段（HIS_DEPT_CODE / ITEM_CODE / DOC_HPS_DEPT_CODE / TECH_HPS_DEPT_CODE / NURSE_HPS_DEPT_CODE）全量 VARCHAR 字符串语义，严禁 CAST 为数值型防前导零丢失。
+-- 索引策略：唯一性由 IS_ENABLED = 1 过滤唯一索引在逻辑层强制约束；检索路径另设项目维度索引与医技护核算单元三元联合索引。
 -- 修改日志：
+-- 2026-09-14 03:00:00 | 结构重构 | 执行比例列聚合与医技护核算单元列集中重构：
+--                                    移除原单列 [HPS_DEPT_CODE] / [HPS_DEPT_NAME]（单一核算单元兜底映射），
+--                                    按医技护三类执行角色展开为 6 个独立核算单元映射列
+--                                    （DOC_HPS_DEPT_CODE/NAME、TECH_HPS_DEPT_CODE/NAME、NURSE_HPS_DEPT_CODE/NAME）；
+--                                    结构遵循高内聚原则划分为【执行比例块】与【医技护核算单元映射块】两个连续物理逻辑块，
+--                                    分别保持数值计算域与维度关联域的物理连续性，便于 ORM 实体类映射与 SELECT 提取可读性；
+--                                    索引 [IX_DIM_DEPT_ITEM_EXEC_RATIO_HPS] 同步升级为 (DOC_HPS_DEPT_CODE, TECH_HPS_DEPT_CODE, NURSE_HPS_DEPT_CODE) 三编码联合检索索引；
+--                                    追加 6 个字段级扩展属性注释，并同步更新头部编码字段枚举与表级注释。
 -- 2026-09-14 02:00:00 | 字段扩展 | 业务时间与留痕区域新增 [DISABLE_DATE] DATETIME NULL 停用日期列（置于 [ITEM_ADD_DATE] 之后），
 --                                    补齐 SCD Type 2 版本保留模型的生效区间右端点，使 (PROVIDE_DATE → DISABLE_DATE) 构成完整业务生效区间；
 --                                    纠偏仅凭 IS_ENABLED + UPDATE_TIME 的半失真停用标记：避免运维侧对废弃行做任何更新（如改备注）
@@ -45,9 +53,13 @@ CREATE TABLE [dbo].[DIM_DEPT_ITEM_EXEC_RATIO] (
         CONSTRAINT [DF_DIM_DEPT_ITEM_EXEC_RATIO_TECH]  DEFAULT (0.00000000), -- 技师执行比例
     [NURSE_EXEC_RATIO]      DECIMAL(18,8)       NOT NULL
         CONSTRAINT [DF_DIM_DEPT_ITEM_EXEC_RATIO_NURSE] DEFAULT (0.00000000), -- 护士执行比例
-    -- ===== 核算单元映射 =====
-    [HPS_DEPT_CODE]         VARCHAR(60)         NULL,       -- 对应核算单元编码（字符串语义，防前导零丢失）
-    [HPS_DEPT_NAME]         NVARCHAR(300)       NULL,       -- 对应核算单元名称（到科室，不分医生技师护士）
+    -- ===== 医技护核算单元映射 =====
+    [DOC_HPS_DEPT_CODE]     VARCHAR(60)         NULL,       -- 医生对应核算单元编码（字符串语义，防前导零丢失）
+    [DOC_HPS_DEPT_NAME]     NVARCHAR(300)       NULL,       -- 医生对应核算单元名称
+    [TECH_HPS_DEPT_CODE]    VARCHAR(60)         NULL,       -- 技师对应核算单元编码（字符串语义，防前导零丢失）
+    [TECH_HPS_DEPT_NAME]    NVARCHAR(300)       NULL,       -- 技师对应核算单元名称
+    [NURSE_HPS_DEPT_CODE]   VARCHAR(60)         NULL,       -- 护士对应核算单元编码（字符串语义，防前导零丢失）
+    [NURSE_HPS_DEPT_NAME]   NVARCHAR(300)       NULL,       -- 护士对应核算单元名称
     -- ===== 业务时间与留痕 =====
     [PROVIDE_DATE]          DATETIME            NULL,       -- 提供日期
     [ITEM_ADD_DATE]         DATETIME            NULL,       -- 项目新增日期
@@ -77,17 +89,17 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE [name] = N'IX_DIM_DEPT_ITEM_EXEC_
     CREATE NONCLUSTERED INDEX [IX_DIM_DEPT_ITEM_EXEC_RATIO_ITEM]
         ON [dbo].[DIM_DEPT_ITEM_EXEC_RATIO] ([ITEM_CODE] ASC, [IS_ENABLED] ASC);
 
--- 核算单元映射检索索引（按 核算单元编码 + 核算单元名称 下钻）
+-- 医技护核算单元映射检索索引（按 医生/技师/护士 三路核算单元编码 下钻）
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE [name] = N'IX_DIM_DEPT_ITEM_EXEC_RATIO_HPS' AND [object_id] = OBJECT_ID(N'[dbo].[DIM_DEPT_ITEM_EXEC_RATIO]'))
     CREATE NONCLUSTERED INDEX [IX_DIM_DEPT_ITEM_EXEC_RATIO_HPS]
-        ON [dbo].[DIM_DEPT_ITEM_EXEC_RATIO] ([HPS_DEPT_CODE] ASC, [HPS_DEPT_NAME] ASC);
+        ON [dbo].[DIM_DEPT_ITEM_EXEC_RATIO] ([DOC_HPS_DEPT_CODE] ASC, [TECH_HPS_DEPT_CODE] ASC, [NURSE_HPS_DEPT_CODE] ASC);
 
 -- =================================================================
 -- 扩展属性：表级与字段级注释
 -- =================================================================
 
 EXEC sp_addextendedproperty
-    @name = N'MS_Description', @value = N'各科室收费项目医技护执行划分维表（HIS 科室 × 收费项目 → 医生/技师/护士执行比例切分）。主键为 ID 自增代理列，业务唯一性由 IS_ENABLED = 1 过滤唯一索引在逻辑层强制约束。业务生效区间由 PROVIDE_DATE → DISABLE_DATE 表达（SCD Type 2 版本保留模型），IS_ENABLED 为该区间的当前逻辑状态投影。',
+    @name = N'MS_Description', @value = N'各科室收费项目医技护执行划分维表（HIS 科室 × 收费项目 → 医生/技师/护士 执行比例切分及对应核算单元映射）。主键为 ID 自增代理列，业务唯一性由 IS_ENABLED = 1 过滤唯一索引在逻辑层强制约束。业务生效区间由 PROVIDE_DATE → DISABLE_DATE 表达（SCD Type 2 版本保留模型），IS_ENABLED 为该区间的当前逻辑状态投影。',
     @level0type = N'SCHEMA', @level0name = N'dbo',
     @level1type = N'TABLE',  @level1name = N'DIM_DEPT_ITEM_EXEC_RATIO';
 
@@ -118,11 +130,23 @@ EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'技师执行�
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'护士执行比例（DECIMAL(18,8)，未配置默认 0.00000000）',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DIM_DEPT_ITEM_EXEC_RATIO', @level2type = N'COLUMN', @level2name = N'NURSE_EXEC_RATIO';
 
-EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'对应核算单元编码（HPS_DEPT_CODE，字符串语义，严禁 CAST 为数值型防前导零丢失；未映射兜底 NULL）',
-    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DIM_DEPT_ITEM_EXEC_RATIO', @level2type = N'COLUMN', @level2name = N'HPS_DEPT_CODE';
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'医生对应核算单元编码（字符串语义，严禁 CAST 为数值型防前导零丢失；未映射兜底 NULL）',
+    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DIM_DEPT_ITEM_EXEC_RATIO', @level2type = N'COLUMN', @level2name = N'DOC_HPS_DEPT_CODE';
 
-EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'对应核算单元名称（到科室，不分医生技师护士）',
-    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DIM_DEPT_ITEM_EXEC_RATIO', @level2type = N'COLUMN', @level2name = N'HPS_DEPT_NAME';
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'医生对应核算单元名称',
+    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DIM_DEPT_ITEM_EXEC_RATIO', @level2type = N'COLUMN', @level2name = N'DOC_HPS_DEPT_NAME';
+
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'技师对应核算单元编码（字符串语义，严禁 CAST 为数值型防前导零丢失；未映射兜底 NULL）',
+    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DIM_DEPT_ITEM_EXEC_RATIO', @level2type = N'COLUMN', @level2name = N'TECH_HPS_DEPT_CODE';
+
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'技师对应核算单元名称',
+    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DIM_DEPT_ITEM_EXEC_RATIO', @level2type = N'COLUMN', @level2name = N'TECH_HPS_DEPT_NAME';
+
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'护士对应核算单元编码（字符串语义，严禁 CAST 为数值型防前导零丢失；未映射兜底 NULL）',
+    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DIM_DEPT_ITEM_EXEC_RATIO', @level2type = N'COLUMN', @level2name = N'NURSE_HPS_DEPT_CODE';
+
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'护士对应核算单元名称',
+    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DIM_DEPT_ITEM_EXEC_RATIO', @level2type = N'COLUMN', @level2name = N'NURSE_HPS_DEPT_NAME';
 
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'提供日期',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DIM_DEPT_ITEM_EXEC_RATIO', @level2type = N'COLUMN', @level2name = N'PROVIDE_DATE';
