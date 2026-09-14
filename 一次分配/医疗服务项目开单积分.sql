@@ -1,38 +1,37 @@
 ﻿/* ===============================================================================
+  Relative Path : 一次分配/医疗服务项目开单积分.sql
   脚本名称: 医疗服务项目开单积分.sql
   业务说明: 医疗服务项目开单决策积分汇总（按 核算单元 × 项目 粒度）
             积分 = SUM(数量) × RVU_VAL(单项绩效点数) × DECISION_COFF(诊疗决策系数)
             剔除绩效大类: 1101(出入院服务类)、1041(诊察类)
   数据流向: dbo.[PF临时医疗服务项目26A] (事实层)
-            INNER JOIN dbo.[DIM_PRF_ITEM_RVU_VERSION] (维度层, 版本号显式路由)
-            => 一次分配 · 医疗服务项目开单积分
+            ──▶ dbo.[sjjk_bmb_2025_06_01] (字典桥接 开单科室代码 id -> 编码)
+            ──▶ dbo.[sjjk_DEPT_UNIT_MAPPING_2025_11_27] (HIS 编码 -> 绩效核算单元)
+            ──▶ dbo.[DIM_PRF_ITEM_RVU_VERSION] (维度层, 单版本 1:1 直连)
+            ──▶ dbo.[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (落库 Target: ITEM_MED_SVC_ORDER_SCORE)
 
   ── 依赖契约 ──
   事实表 : dbo.[PF临时医疗服务项目26A]
            [项目代码] NVARCHAR(60) / [开单科室代码] BIGINT / [开单时间] DATETIME
            [数量] DECIMAL(18,8)
+  桥接表 : dbo.[sjjk_bmb_2025_06_01]（部门字典表）
+           [id] bigint 主键聚簇 / [编码] nvarchar(10) —— 事实层数值主键 → HIS 业务编码的唯一桥接通道
   维表   : dbo.[DIM_PRF_ITEM_RVU_VERSION]
-           主键 (ORG_CODE, VERSION_NO, PROJ_CODE, MEAS_UNIT)
+           主键 (ORG_CODE, VERSION_NO, PROJ_CODE, MEAS_UNIT)；当前系统仅存单版本，
+           VERSION_NO 退化为纯快照/备注属性，脚本内做 1:1 直连，不开窗收敛
            [RVU_VAL] numeric(12,4) / [DECISION_COFF] decimal(18,4)
   拉链维表: dbo.[sjjk_DEPT_UNIT_MAPPING_2025_11_27]
             [PERFORM_PERSON_TYPE_CODE] varchar(100) / [HIS_DEPT_CODE] varchar(300)
             [HPS_DEPT_CODE] / [HPS_DEPT_NAME] / [START_DATE] datetime2 / [END_DATE] datetime2
   ── 关键纠偏（防熵增） ──
-  1. 维表主键含 VERSION_NO，同一 PROJ_CODE 存在多版本/多机构/多计费单位，
-     直接 JOIN 将造成行级笛卡尔放大、积分虚增。故经 DIM_LATEST 层收敛单版本快照（VERSION_RANK = 1）。
-  2. 所有参与运算的系数、数量在计算前统一显式 CAST 为 DECIMAL(18,8)，
-     与落库精度同源，杜绝低精度截断累积误差。
-  3. 拉链维表按 (HIS_DEPT_CODE, START_DATE) 排序收敛最新版本快照（VERSION_RANK = 1），
-     事实明细与快照按开单时间半开区间 [START_DATE, END_DATE) 关联，防止历史科室变更引发的行数膨胀与积分虚增。
-  4. 拉链维表 HIS_DEPT_CODE 为旧版字符编码（如 '0030'），事实层 [开单科室代码] 为数值编码（如 10），
-     直连将全量失配。故在 fact_raw_keyed 层统一归一为 RIGHT('0' + CAST(DEPT_CODE AS VARCHAR(20)), 4) 后再关联。
-     注：当前关联实际以 HIS 科室名称（归一化尾随空格）为桥，HIS_DEPT_CODE 归一逻辑保留待用。
-  5. 维表对同一 (HIS_DEPT_CODE, START_DATE, END_DATE) 存在重复行（0433/11941/11944/11961），
-     且同一 HIS 科室 1:N 映射至多核算单元，按 PARTITION BY (HIS_DEPT_CODE, START_DATE, END_DATE) 取 ID 最大行防膨胀。
-  6. 原始开单科室（DEPT_CODE/DEPT_NAME）与映射行快照仅作为"渡河之桥"，joined 层完成映射即抛弃，
-     不再向上游沉淀，杜绝无关维度污染聚合粒度与冗余字符串拼接。
+  1. 【解耦科室名称】取消以 HIS 科室名称作映射桥，改用事实层 [开单科室代码]
+     ──(id)──▶ sjjk_bmb_2025_06_01.[编码] ──(HIS_DEPT_CODE)──▶ 直连映射表，全链以编码驱动。
+  2. 【单版本直连】RVU 维表移除 ROW_NUMBER() 开窗排序，按单版本 1:1 直连（VERSION_NO 仅作快照属性）。
+  3. 【拉链时间截面】拉链维表按 (HIS_DEPT_CODE, START_DATE) 收敛快照，事实明细以 [START_DATE, END_DATE) 时间窗匹配。
 
   修改日志：
+  2026-09-14 16:30:00 | 键匹配精简 | 移除 bmb_bridge / fact_raw 中 HIS_DEPT_CODE 的 RIGHT 补零与 RTRIM/LTRIM 格式化拼接，改为字典层 [编码] 原值直连匹配；头部纠偏收敛为 3 条核心架构决策。
+  2026-09-14 16:00:00 | 强主键关联与维表降维 | 引入部门字典 id->编码 强关联解耦名称：新增 bmb_bridge CTE，以 [开单科室代码](BIGINT) 直连 sjjk_bmb_2025_06_01.id 取出 [编码] 精准匹配拉链维表；删除 fact_raw_keyed（HIS_DEPT_NAME_KEY 字符串归一）并将 dept_unit_mapping 的 ROW_NUMBER() 分区键由 HIS_DEPT_NAME 改为 HIS_DEPT_CODE，joined 关联条件同步改键。简化单版本 RVU 维表获取：删除 dim_latest_version / dim_pick 两层开窗收敛 CTE，dim_version_scope 直接 1:1 供 joined 消费，VERSION_NO 退化为纯快照属性。下游积分算式与落库、第二区块读取逻辑零改动。
   2026-09-12 22:50:00 | 字段扩展 | 追加 TOTAL_QTY 物理列映射（CAST(f.[TOTAL_QTY] AS DECIMAL(18,8))）至 DWD_FIN_CALC_ALLOC1_DETAIL_LOG，将工作量/工分一等公民化（BI 可直接 SUM 对账，免解析 JSON）；CALC_DETAIL_JSON 由 9 节点扩展为 13 节点全量过程仓，补齐 核算年份/核算月份/核算单元编码/核算单元名称 及 计算过程描述（账期与单元编码因 agg 层为文本形态，按源列声明宽度 CAST AS VARCHAR(10) 序列化，与物理 INT 列语义同源）；其余计算 CTE 与双区块 Envelope 结构零改动。
   2026-09-12 22:30:00 | 架构持久化 | Envelope Pattern 双区块重构：第一区块前置幂等 DELETE（按 CALC_YEAR/CALC_MONTH/ITEM_CODE/UNIT_CODE 清理，清场范围 ⊇ UQ 前缀 (CALC_YEAR,CALC_MONTH,ITEM_CODE,UNIT_CODE,PROJ_CODE) 故语义安全），计算收敛后 INSERT 落至一次分配专用物理表 DWD_FIN_CALC_ALLOC1_DETAIL_LOG（ITEM_CODE='ITEM_MED_SVC_ORDER_SCORE' / FINAL_VALUE_TYPE='SCORE'），显式下沉 PROJ_CODE/PROJ_NAME/ITEM_CAT_CODE/ITEM_CAT_NAME 命脉列，过程因子（单项RVU/决策系数/汇总数量）经 FOR JSON PATH 收敛入 CALC_DETAIL_JSON；第二区块以 波浪号 隔离，从物理表读取生成 CTE_DWD_READ_ALIAS 并严格承接 struct_code/struct_name/result_value 模板契约（末尾补分号闭合）。原 fact_raw → final 全部计算 CTE 零改动。
   2026-09-12 21:10:00 | 架构瘦身 | 链路剪枝：彻底剥离原始开单科室字段（DEPT_CODE/DEPT_NAME）及中间映射快照 JSON（MAPPING_SNAPSHOT），原始科室降级为纯"渡河之桥"仅用于匹配映射表；聚合粒度锁死为【核算单元编码 × 核算单元名称 × 项目代码】；移除 agg 层 O(N²) 冗余自连接，重构为"明细计算 → 维度系数收敛 → 目标粒度汇总"三段解耦，消除行级放大与嵌套子查询卡顿；新增 UNKNOWN/未映射 兜底标记。
@@ -71,21 +70,34 @@ WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
   AND [UNIT_CODE] IN {struct_codes}
 ;
 
--- 2. 算子计算与持久化落库（fact_raw → final 计算链路零改动）
+-- 2. 算子计算与持久化落库（bmb_bridge → fact_raw → dept_unit_mapping → dim_version_scope
+--    → joined → agg_coff_collapse → agg → final；已解耦科室名称硬关联并剥离单版本开窗收敛）
 WITH
+-- ── Import CTE: 部门字典桥接层（事实层数值主键 [开单科室代码] → 业务编码 [编码]） ──
+--    原样透传数据库物理值，不做任何补零/去空格/格式化加工（查询出来是什么就是什么）。
+bmb_bridge AS (
+    SELECT
+        b.[id]                          AS DEPT_ID,
+        b.[编码]                        AS HIS_DEPT_CODE
+    FROM dbo.[sjjk_bmb_2025_06_01] AS b WITH (NOLOCK)
+),
+
 -- ── Import CTE: 事实层开口单时间窗（半开区间 [月初, 次月初)） ──
 fact_raw AS (
     SELECT
         a.[项目代码]                                   AS PROJ_CODE,
         a.[项目名称]                                   AS PROJ_NAME,
-        a.[开单科室代码]                               AS DEPT_CODE,
+        a.[开单科室代码]                               AS DEPT_ID,
         a.[开单科室]                                   AS DEPT_NAME,
-        CAST(a.[开单科室代码] AS VARCHAR(60))          AS DEPT_CODE_KEY,
+        -- HIS 科室编码：字典层原值直连，作为拉链维表关联键
+        b.[HIS_DEPT_CODE],
         a.[开单时间]                                   AS ORDER_TIME,
         CAST(a.[数量]  AS DECIMAL(18,8))               AS QTY,
         CAST(a.[单价]  AS DECIMAL(18,8))               AS UNIT_PRICE,
         CAST(a.[金额]  AS DECIMAL(18,8))               AS AMOUNT
     FROM dbo.[PF临时医疗服务项目26A] AS a WITH (NOLOCK)
+    INNER JOIN bmb_bridge AS b
+        ON a.[开单科室代码] = b.[DEPT_ID]
     WHERE a.[开单时间] >= DATEFROMPARTS(CAST('{year}' AS INT), CAST('{month}' AS INT), 1)
       AND a.[开单时间] <  DATEADD(MONTH, 1, DATEFROMPARTS(CAST('{year}' AS INT), CAST('{month}' AS INT), 1))
 ),
@@ -104,18 +116,7 @@ dept_unit_mapping_raw AS (
     WHERE m.[PERFORM_PERSON_TYPE_CODE] = '1001'
 ),
 
--- ── Logical CTE: 拉链维表键归一（HIS_DEPT_NAME 保留尾随空格归一） ──
-fact_raw_keyed AS (
-    SELECT
-        f.[PROJ_CODE],
-        f.[PROJ_NAME],
-        f.[DEPT_CODE],
-        f.[DEPT_NAME],
-        f.[ORDER_TIME],
-        f.[QTY],
-        RTRIM(LTRIM(f.[DEPT_NAME])) AS HIS_DEPT_NAME_KEY
-    FROM fact_raw AS f
-),
+-- ── Logical CTE: 拉链维表收敛（按 HIS_DEPT_CODE 强关联键去重，锁定最新快照防范围膨胀） ──
 dept_unit_mapping AS (
     SELECT
         r.[MAPPING_ID],
@@ -136,7 +137,7 @@ dept_unit_mapping AS (
             r.[START_DATE],
             r.[END_DATE],
             ROW_NUMBER() OVER (
-                PARTITION BY RTRIM(LTRIM(r.[HIS_DEPT_NAME])), r.[START_DATE]
+                PARTITION BY r.[HIS_DEPT_CODE], r.[START_DATE]
                 ORDER BY r.[MAPPING_ID] DESC
             ) AS VERSION_RANK
         FROM dept_unit_mapping_raw AS r
@@ -144,55 +145,22 @@ dept_unit_mapping AS (
     WHERE r.[VERSION_RANK] = 1
 ),
 
--- ── Logical CTE: 维表版本收敛（隔离 VERSION_NO / ORG_CODE / MEAS_UNIT 维度，防行级放大） ──
+-- ── Import CTE: 绩效大类维表作用域（单版本假设下 1:1 直连，VERSION_NO 退化为纯快照属性；
+--              大类 1101/1041 与空项目编码在 JOIN 前完成剪枝） ──
 dim_version_scope AS (
     SELECT
-        b.[ORG_CODE],
-        b.[VERSION_NO],
         b.[PROJ_CODE],
-        b.[MEAS_UNIT],
         b.[PROJ_NAME],
-        b.[RVU_VAL],
+        CAST(b.[RVU_VAL]       AS DECIMAL(18,8)) AS RVU_VAL,
         b.[ITEM_CAT_CODE],
         b.[ITEM_CAT_NAME],
-        b.[DECISION_COFF]
+        CAST(b.[DECISION_COFF] AS DECIMAL(18,8)) AS DECISION_COFF
     FROM dbo.[DIM_PRF_ITEM_RVU_VERSION] AS b WITH (NOLOCK)
     WHERE b.[ITEM_CAT_CODE] NOT IN ('1101', '1041')
       AND b.[PROJ_CODE] IS NOT NULL
 ),
-dim_latest_version AS (
-    SELECT
-        d.[ORG_CODE],
-        d.[VERSION_NO],
-        d.[PROJ_CODE],
-        d.[MEAS_UNIT],
-        d.[PROJ_NAME],
-        d.[RVU_VAL],
-        d.[ITEM_CAT_CODE],
-        d.[ITEM_CAT_NAME],
-        d.[DECISION_COFF],
-        ROW_NUMBER() OVER (
-            PARTITION BY d.[PROJ_CODE], d.[MEAS_UNIT]
-            ORDER BY d.[VERSION_NO] DESC
-        ) AS VERSION_RANK
-    FROM dim_version_scope AS d
-),
-dim_pick AS (
-    SELECT
-        c.[ORG_CODE],
-        c.[VERSION_NO],
-        c.[PROJ_CODE],
-        c.[MEAS_UNIT],
-        c.[PROJ_NAME],
-        CAST(c.[RVU_VAL]       AS DECIMAL(18,8)) AS RVU_VAL,
-        c.[ITEM_CAT_CODE],
-        c.[ITEM_CAT_NAME],
-        CAST(c.[DECISION_COFF] AS DECIMAL(18,8)) AS DECISION_COFF
-    FROM dim_latest_version AS c
-    WHERE c.[VERSION_RANK] = 1
-),
 
--- ── Logical CTE: 事实 × 维度 关联（仅取目标核算单元，原始科室字段到此为止） ──
+-- ── Logical CTE: 事实 × 维度 关联（HIS 编码强关联核算单元，原始科室字段到此为止） ──
 joined AS (
     SELECT
         f.[PROJ_CODE],
@@ -205,11 +173,11 @@ joined AS (
         d.[DECISION_COFF],
         f.[QTY],
         CAST(f.[QTY] * d.[RVU_VAL] * d.[DECISION_COFF] AS DECIMAL(18,8)) AS ITEM_SCORE
-    FROM fact_raw_keyed AS f
-    INNER JOIN dim_pick AS d
+    FROM fact_raw AS f
+    INNER JOIN dim_version_scope AS d
         ON f.[PROJ_CODE] = d.[PROJ_CODE]
     LEFT JOIN dept_unit_mapping AS m
-        ON f.[HIS_DEPT_NAME_KEY] = RTRIM(LTRIM(m.[HIS_DEPT_NAME]))
+        ON f.[HIS_DEPT_CODE] = m.[HIS_DEPT_CODE]
        AND f.[ORDER_TIME] >= m.[START_DATE]
        AND (m.[END_DATE] IS NULL OR f.[ORDER_TIME] < m.[END_DATE])
 ),
