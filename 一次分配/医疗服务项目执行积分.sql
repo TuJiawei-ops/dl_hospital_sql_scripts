@@ -261,6 +261,7 @@ final AS (
         j.[BIZ_EPOCH],
         j.[EXEC_DEPT_ID],
         j.[EXEC_DEPT_NAME],
+        j.[EXEC_DEPT_CODE_KEY],
         j.[PROJ_CODE],
         j.[PROJ_NAME],
         j.[QTY],
