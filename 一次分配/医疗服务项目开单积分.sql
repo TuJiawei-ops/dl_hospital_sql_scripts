@@ -28,8 +28,11 @@
      ──(id)──▶ sjjk_bmb_2025_06_01.[编码] ──(HIS_DEPT_CODE)──▶ 直连映射表，全链以编码驱动。
   2. 【单版本直连】RVU 维表移除 ROW_NUMBER() 开窗排序，按单版本 1:1 直连（VERSION_NO 仅作快照属性）。
   3. 【拉链时间截面】拉链维表按 (HIS_DEPT_CODE, START_DATE) 收敛快照，事实明细以 [START_DATE, END_DATE) 时间窗匹配。
+  4. 【RVU 全字段快照】dim_version_scope 升级为全字段 1:1 直连（[ID] 别名 RVU_ID 防主键碰撞），
+     JSON 过程仓追加单层嵌套 [RVU配置快照] 节点，留存维度行完整血缘（版本/机构/计费单位/审计人等）。
 
   修改日志：
+  2026-09-14 17:00:00 | JSON 过程仓扩展与审计文本瘦身 | dim_version_scope 由 6 列升级为全字段 1:1 直连（[ID] 别名 RVU_ID 防主键碰撞），CALC_DETAIL_JSON 追加单层嵌套 [RVU配置快照] 节点（23 节点，经 JSON_QUERY + FOR JSON PATH 子查询按 PROJ_CODE 回表生成，与姊妹脚本 医疗服务项目执行积分.sql 契约同构）；剔除 CALC_PROCESS_TEXT 末段 "+ 0 = 积分" 恒等零加增熵尾缀，末段直接收敛至最终开单积分。核心算式 DECISION_SCORE 与聚合逻辑零改动。
   2026-09-14 16:30:00 | 键匹配精简 | 移除 bmb_bridge / fact_raw 中 HIS_DEPT_CODE 的 RIGHT 补零与 RTRIM/LTRIM 格式化拼接，改为字典层 [编码] 原值直连匹配；头部纠偏收敛为 3 条核心架构决策。
   2026-09-14 16:00:00 | 强主键关联与维表降维 | 引入部门字典 id->编码 强关联解耦名称：新增 bmb_bridge CTE，以 [开单科室代码](BIGINT) 直连 sjjk_bmb_2025_06_01.id 取出 [编码] 精准匹配拉链维表；删除 fact_raw_keyed（HIS_DEPT_NAME_KEY 字符串归一）并将 dept_unit_mapping 的 ROW_NUMBER() 分区键由 HIS_DEPT_NAME 改为 HIS_DEPT_CODE，joined 关联条件同步改键。简化单版本 RVU 维表获取：删除 dim_latest_version / dim_pick 两层开窗收敛 CTE，dim_version_scope 直接 1:1 供 joined 消费，VERSION_NO 退化为纯快照属性。下游积分算式与落库、第二区块读取逻辑零改动。
   2026-09-12 22:50:00 | 字段扩展 | 追加 TOTAL_QTY 物理列映射（CAST(f.[TOTAL_QTY] AS DECIMAL(18,8))）至 DWD_FIN_CALC_ALLOC1_DETAIL_LOG，将工作量/工分一等公民化（BI 可直接 SUM 对账，免解析 JSON）；CALC_DETAIL_JSON 由 9 节点扩展为 13 节点全量过程仓，补齐 核算年份/核算月份/核算单元编码/核算单元名称 及 计算过程描述（账期与单元编码因 agg 层为文本形态，按源列声明宽度 CAST AS VARCHAR(10) 序列化，与物理 INT 列语义同源）；其余计算 CTE 与双区块 Envelope 结构零改动。
@@ -48,10 +51,10 @@
   {struct_codes}: 科室代码过滤集, 英文逗号分隔; 留空则不过滤
   输出契约   : 核算年份 / 核算月份 / 核算单元编码 / 核算单元名称 / 项目代码 / 项目名称
                / 绩效核算大类代码 / 绩效核算大类名称 / 单项RVU点数 / 诊疗决策系数
-               / 汇总数量 / 开单决策积分 / 计算过程描述
+               / 汇总数量 / 开单决策积分 / 计算过程描述 / RVU配置快照
   落库契约   : 第一区块写入 dbo.DWD_FIN_CALC_ALLOC1_DETAIL_LOG（一次分配专用物理表）
                列化核对列: FINAL_VALUE(开单决策积分) + TOTAL_QTY(汇总工作量)
-               JSON 过程仓: CALC_DETAIL_JSON 全量 13 节点（账期/单元/项目/大类/因子/过程描述）
+               JSON 过程仓: CALC_DETAIL_JSON 全量 14 节点（账期/单元/项目/大类/因子/过程描述/RVU配置快照）
   粒度定义   : 核算单元编码(HPS_DEPT_CODE) × 核算单元名称(HPS_DEPT_NAME) × 项目代码(PROJ_CODE)
                原始开单科室（DEPT_CODE/DEPT_NAME）与映射快照仅作为关联核算单元的中间桥梁，汇总层全量剥离
   =============================================================================== */
@@ -145,16 +148,32 @@ dept_unit_mapping AS (
     WHERE r.[VERSION_RANK] = 1
 ),
 
--- ── Import CTE: 绩效大类维表作用域（单版本假设下 1:1 直连，VERSION_NO 退化为纯快照属性；
---              大类 1101/1041 与空项目编码在 JOIN 前完成剪枝） ──
+-- ── Import CTE: 绩效大类维表作用域（全字段 1:1 直连，大类剔除前置剪枝；[ID] 别名 RVU_ID 防与日志表主键碰撞） ──
 dim_version_scope AS (
     SELECT
+        b.[VERSION_NO],
+        b.[VERSION_DESC],
+        b.[ORG_CODE],
+        b.[ORG_NAME],
+        b.[SRC_SYS_CODE],
         b.[PROJ_CODE],
         b.[PROJ_NAME],
-        CAST(b.[RVU_VAL]       AS DECIMAL(18,8)) AS RVU_VAL,
+        b.[MEAS_UNIT],
+        CAST(b.[RVU_VAL] AS DECIMAL(18,8))        AS RVU_VAL,
         b.[ITEM_CAT_CODE],
         b.[ITEM_CAT_NAME],
-        CAST(b.[DECISION_COFF] AS DECIMAL(18,8)) AS DECISION_COFF
+        CAST(b.[UNIT_PRICE] AS DECIMAL(18,8))     AS UNIT_PRICE,
+        b.[OPR_LEVEL_CODE],
+        b.[OPR_LEVEL_NAME],
+        b.[CREATE_USER],
+        b.[CREATE_TIME],
+        b.[UPDATE_USER],
+        b.[UPDATE_TIME],
+        b.[ID]                                    AS RVU_ID,
+        CAST(b.[DECISION_COFF] AS DECIMAL(18,8))  AS DECISION_COFF,
+        CAST(b.[EXEC_COFF] AS DECIMAL(18,8))      AS EXEC_COFF,
+        b.[REMARK],
+        b.[SCORE_REASON]
     FROM dbo.[DIM_PRF_ITEM_RVU_VERSION] AS b WITH (NOLOCK)
     WHERE b.[ITEM_CAT_CODE] NOT IN ('1101', '1041')
       AND b.[PROJ_CODE] IS NOT NULL
@@ -239,12 +258,13 @@ final AS (
         a.[DECISION_COFF],
         a.[TOTAL_QTY],
         a.[DECISION_SCORE],
+        -- 三段式审计文本：[元数据段] | [中文逻辑公式段] | [纯数学代入算式段 = 最终积分]
+        -- 已剔除原 "积分 + 0 = 积分" 无效加数恒等段（恒等零加增熵），
+        -- 末段直接收敛至最终开单积分，数学算式自身已完成唯一数字收口
         '医疗服务开单积分 | 核算单元项目开单积分 = 汇总数量 × 单项RVU点数 × 诊疗决策系数 | '
-            + CAST(a.[TOTAL_QTY]     AS VARCHAR(50)) + ' × '
-            + CAST(a.[RVU_VAL]       AS VARCHAR(50)) + ' × '
+            + CAST(a.[TOTAL_QTY] AS VARCHAR(50)) + ' × '
+            + CAST(a.[RVU_VAL] AS VARCHAR(50)) + ' × '
             + CAST(a.[DECISION_COFF] AS VARCHAR(50)) + ' = '
-            + CAST(a.[DECISION_SCORE] AS VARCHAR(50)) + ' | '
-            + CAST(a.[DECISION_SCORE] AS VARCHAR(50)) + ' + 0 = '
             + CAST(a.[DECISION_SCORE] AS VARCHAR(50)) AS CALC_PROCESS_TEXT
     FROM agg AS a
     WHERE a.[UNIT_CODE] IN {struct_codes}
@@ -285,7 +305,38 @@ SELECT
             CAST(f.[DECISION_COFF] AS DECIMAL(18,8))   AS [诊疗决策系数],
             CAST(f.[TOTAL_QTY]     AS DECIMAL(18,8))   AS [汇总数量],
             CAST(f.[DECISION_SCORE] AS DECIMAL(18,8))  AS [开单决策积分],
-            f.[CALC_PROCESS_TEXT]                      AS [计算过程描述]
+            f.[CALC_PROCESS_TEXT]                      AS [计算过程描述],
+            -- RVU 配置全字段快照（FOR JSON PATH 纯常量投影，零表回表；按 PROJ_CODE 1:1 直连 dim_version_scope）
+            -- 注：与同级扁平节点互不干扰，位于根对象内联；父级 WITHOUT_ARRAY_WRAPPER 必须保留
+            JSON_QUERY((
+                SELECT
+                    c.[VERSION_NO]       AS [版本号],
+                    c.[VERSION_DESC]     AS [版本描述],
+                    c.[ORG_CODE]         AS [机构编码],
+                    c.[ORG_NAME]         AS [机构名称],
+                    c.[SRC_SYS_CODE]     AS [源系统编码],
+                    c.[PROJ_CODE]        AS [收费项目编码],
+                    c.[PROJ_NAME]        AS [收费项目名称],
+                    c.[MEAS_UNIT]        AS [原始计费单位],
+                    c.[RVU_VAL]          AS [单项绩效点数],
+                    c.[ITEM_CAT_CODE]    AS [绩效核算大类编码],
+                    c.[ITEM_CAT_NAME]    AS [绩效核算大类名称],
+                    c.[UNIT_PRICE]       AS [历史参考单价],
+                    c.[OPR_LEVEL_CODE]   AS [手术等级编码],
+                    c.[OPR_LEVEL_NAME]   AS [手术等级名称],
+                    c.[CREATE_USER]      AS [创建人],
+                    CONVERT(VARCHAR(19), c.[CREATE_TIME], 120) AS [创建时间],
+                    c.[UPDATE_USER]      AS [修改人],
+                    CONVERT(VARCHAR(19), c.[UPDATE_TIME], 120) AS [修改时间],
+                    c.[RVU_ID]           AS [冗余ID],
+                    c.[DECISION_COFF]    AS [诊疗决策系数],
+                    c.[EXEC_COFF]        AS [执行系数],
+                    c.[REMARK]           AS [备注说明],
+                    c.[SCORE_REASON]     AS [评分理由依据]
+                FROM dim_version_scope AS c
+                WHERE c.[PROJ_CODE] = f.[PROJ_CODE]
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            ))                                          AS [RVU配置快照]
         FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
     )                                           AS [CALC_DETAIL_JSON],
     SYSDATETIME()                               AS [CREATE_TIME]
