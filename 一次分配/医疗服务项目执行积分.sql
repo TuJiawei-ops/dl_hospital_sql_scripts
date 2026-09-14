@@ -21,11 +21,14 @@
            主键 [id] BIGINT 聚簇；[编码] nvarchar(10) NOT NULL
            [名称] nvarchar(100) / [建档时间] datetime / [撤档时间] datetime
            该表为事实层数值主键 [执行科室代码] 与维表业务编码 [HIS_DEPT_CODE] 的唯一桥接通道。
-  维表 A : dbo.[DIM_PRF_ITEM_RVU_VERSION]（绩效大类来源）
+  维表 A : dbo.[DIM_PRF_ITEM_RVU_VERSION]（绩效大类来源 / 全字段配置快照来源）
            主键 (ORG_CODE, VERSION_NO, PROJ_CODE, MEAS_UNIT)——本脚本按系统单版本假设，
-           不使用 VERSION_NO / ORG_CODE 做开窗收敛，仅按 PROJ_CODE 做 MAX() 拉平
+           不使用 VERSION_NO / ORG_CODE 做开窗收敛，亦不做 MAX() 拉平，仅按 PROJ_CODE 1:1 直连
            [PROJ_CODE] varchar(50) / [ITEM_CAT_CODE] varchar(50) / [ITEM_CAT_NAME] nvarchar(100)
-           [RVU_VAL] numeric(12,4) / [DECISION_COFF] decimal(18,4)
+           [RVU_VAL] numeric(12,4) / [DECISION_COFF] decimal(18,4) / [EXEC_COFF] decimal(5,4)
+           [VERSION_NO] varchar(20) / [SRC_SYS_CODE] varchar(50) / [MEAS_UNIT] nvarchar(50)
+           [UNIT_PRICE] numeric(18,4) / [ID] bigint（脚本内别名 RVU_ID）
+           [CREATE_TIME] [UPDATE_TIME] datetime / [CREATE_USER] [UPDATE_USER] varchar(50)
   维表 B : dbo.[DIM_DEPT_ITEM_EXEC_RATIO]（执行比例与核算单元来源）
            [HIS_DEPT_CODE] VARCHAR(60) / [ITEM_CODE] VARCHAR(60) / [IS_ENABLED] TINYINT
            [DOC_EXEC_RATIO] [TECH_EXEC_RATIO] [NURSE_EXEC_RATIO] DECIMAL(18,8)
@@ -40,8 +43,14 @@
      事实层 [执行科室代码] ──(id = id)──▶ 字典层 [编码] ──▶ 作为 EXEC_DEPT_CODE_KEY 与维表 B 匹配。
   2. 字典关联采用 INNER JOIN：字典未命中即意味着该执行科室缺少业务编码，
      下游维表必然无法匹配，此类行对执行积分切分无贡献价值，提前剪枝减少无效链路开销。
-  3. 维表 A 按系统单版本假设直接抽取，不再做 VERSION_NO 开窗收敛；
-     仍保留按 PROJ_CODE 的 MAX() 拉平（防多计费单位/多机构分支造成行级放大）。
+  3. 维表 A 按系统单版本假设直接全字段抽取，不做 VERSION_NO 开窗收敛，也不再做 MAX() 拉平；
+     以【全字段 1:1 直连】取代原 dim_collapse 收敛层，无条件保留原始维表物理宽度与血缘，
+     供 CALC_DETAIL_JSON [RVU配置快照] 节点完整序列化版本配置现场。
+     【性能红线·必读】直连后 joined 的物理行数完全由维表主键口径 (ORG_CODE, VERSION_NO, PROJ_CODE, MEAS_UNIT)
+     决定。若源维表在 PROJ_CODE 上存在多计费单位 / 多机构 / 多版本分支，将发生行级放大并传导至 cte_role_unpivot 聚合；
+     故本脚本的成立前提为【源表在目标账期内单版本单计费单位】。若该前提被打破，
+     必须改由方案调度协议按 VERSION_NO 显式路由（.clinerules 第 9 节版本寻址解耦），
+     严禁在本脚本内以 ROW_NUMBER() / MAX() 隐式寻址。
   4. 维表 B 的生效唯一键为 (HIS_DEPT_CODE, ITEM_CODE) 且受 IS_ENABLED = 1 过滤唯一索引约束，
      故 LEFT JOIN 在启用态下天然 1:1，不会放大行数；关联条件中显式携带 r.[IS_ENABLED] = 1，
      避免停用历史行参与匹配。
@@ -65,15 +74,17 @@
      使后续维度关联与出口 IO 成本与【科室 × 项目】数量级对齐，而非与收费笔数对齐。
   11.【字段裁剪·单价语义】[平均单价] 仅为原 [单价] 聚合后的还原度量（导出型展示列），
      不具备独立聚合可加性，且下游执行积分切分（数量 × 执行比例 × RVU）全程不依赖单价，
-     故已在 dim_version_scope / dim_collapse / joined / final 及出口契约中全量移除，
+     故已在 dim_version_scope / joined / final 及出口契约中全量移除（单价不进计算链路，
      同步消除零除守卫与除法算子开销。若后续确需单价，须重新走 SUM(金额) ÷ SUM(数量) 还原。
   12.【账期哨兵】聚合后 [执行时间] 已被消除，但下游维表（如拉链映射）可能需要账期时点
      做半开区间匹配。故在出口携带 BIZ_EPOCH = 次月 1 日 00:00:00（账期右端点哨兵），
      以常量穿越 CTE 链而非污染聚合键；该列不作为业务时点列对外输出。
   13.【字段裁剪·诊疗决策系数】[DECISION_COFF] 属开单侧决策语义，仅服务于
      医疗服务项目开单积分（数量 × RVU_VAL × DECISION_COFF），与执行侧拆算无因果关系。
-     为杜绝无关维度污染执行积分链路与冗余 I/O，已从维表抽取（dim_version_scope）、
-     维度收敛（dim_collapse）、关联层（joined）、final 及出口契约全量移除；
+     为杜绝无关维度污染执行积分链路，[DECISION_COFF] 已从 joined / cte_role_unpivot / final
+     及出口契约的算术链路全量移除，不再参与执行侧任何乘算；
+     注：2026-09-14 15:10:00 起该列随维表全字段 1:1 直连保留于 dim_version_scope，并仅经
+     [RVU配置快照].[诊疗决策系数] 以审计留痕形态入 JSON，属"只留痕、不参与计算"的纯快照语义。
      维表 A 契约中 [DECISION_COFF] 列保留声明以维持 DDL 血缘可追溯性。
   14.【行转列剪枝】医技护三角色由 CROSS APPLY (VALUES ...) 动态行转列，1 条【核算单元 × 项目】
       事实行按角色展开为 1~3 行，并强制剪枝：
@@ -92,16 +103,20 @@
       预聚合，TOTAL_QTY / TOTAL_AMOUNT / TOTAL_EXEC_POINTS 同步 SUM 累加，
       final 层只做 1:1 契约投影与综合比例反推；HIS 执行科室作为前置桥接维度，
       聚合后无单一取值可代表全组，故不落物理列亦不入 JSON，仅由核算单元维度承载结果。
-  17.【JSON 扁平化·性能红线】CALC_DETAIL_JSON 严禁嵌入任何针对事实或关联层的子查询
+  17.【JSON 嵌套·性能红线】CALC_DETAIL_JSON 严禁嵌入任何针对事实层的子查询
       （曾因 (SELECT DISTINCT ... FROM joined ... CROSS APPLY ... FOR JSON PATH) 逐行回表，
-      叠加 15 节点 × 3 层嵌套包装，导致单次 INSERT 触发 N×M 次扫描、执行超 100 秒）。
-      现状：单层扁平 15 节点，全部取自 final 已物化标量列，零回表、零嵌套，
-      查询复杂度 O(N)，与落库行数线性同阶。后续维护严禁重新引入嵌套 JSON 或外部表关联。
+      叠加 3 层嵌套包装，导致单次 INSERT 触发 N×M 次扫描、执行超 100 秒）。
+      现状：单层扁平 15 个标量节点 + 1 个单层嵌套节点 [RVU配置快照]（JSON_QUERY 标量绑定向子查询，
+      仅投影 dim_version_scope 已剪枝 CTE，按 PROJ_CODE 等值命中维表索引，不回表 joined/事实层）。
+      查询复杂度 O(N)，与落库行数线性同阶；嵌套层数硬上限为 1，后续维护严禁再叠加第三层 JSON 包装。
   18.【预聚合层解耦】角色展开与跨 HIS 科室聚合统一收敛在 cte_role_unpivot 层（Intermediate），
       final 层严禁再做 GROUP BY（防污点隔离），仅保留标量投影、综合执行比例反推与审计文本拼装。
   19.【综合执行比例反推】聚合后执行比例不可再沿用行级原始值（各 HIS 科室可能配置不同比例），
       必须由 [总执行积分] ÷ ([总数量] × [单项RVU点数]) 反推加权综合比例，
       并以 NULLIF 包裹分母防除零，ISNULL 兜底 0.00000000，全链 DECIMAL(18,8) 同精度。
+  20.【公式段精简纠偏】审计文本原末段为 "积分 + 0.00000000 = 积分" 无效加数形态（恒等零加增熵），
+      现精简为 [纯数字结算恒等段]（直接输出最终积分）。本核算项不存在 0.00000000 以外的兜底加项、
+      亦无二次舍入调整，数学代入算式段自身已满足"纯数字收口"语义，故不再额外追加纯数字结算算式段。
 
   ── 模板占位符（严禁破坏） ──
   '{year}'      : 核算年份, 4 位数字文本, 默认 '2025'
@@ -114,9 +129,12 @@
   落库契约   : 第一区块写入 dbo.DWD_FIN_CALC_ALLOC1_DETAIL_LOG（一次分配专用物理表）
                唯一键对齐: (CALC_YEAR, CALC_MONTH, ITEM_CODE, UNIT_CODE, PROJ_CODE, EXEC_ROLE)
                列化核对列: FINAL_VALUE(执行积分) + TOTAL_QTY(汇总数量)
-               JSON 过程仓: CALC_DETAIL_JSON 单层扁平化 15 节点（账期/核算单元/项目大类/
+               JSON 过程仓: CALC_DETAIL_JSON = 单层扁平 15 标量节点（账期/核算单元/项目大类/
                             RVU点数/执行角色比例/汇总数量金额/最终执行积分/计算过程描述）
-                            零嵌套、零外部表关联，纯 final 标量字段内存拼接（O(N) 线性）
+                            + 1 个单层嵌套节点 [RVU配置快照]（DIM_PRF_ITEM_RVU_VERSION 全 23 字段中文映射，
+                              按 PROJ_CODE 与当前行 1:1 直连，版本/机构/源系统/计费单位/单价/
+                              手术等级/审计人与时间/决策系数/执行系数等配置现场全量留痕）
+                            扁平标量节点为零回表内存拼接，快照节点为索引命中的标量绑定向子查询（O(N) 线性）
   粒度定义   : 【核算单元 × 收费项目 × 执行角色】聚合落库粒度
                事实层按 (EXEC_DEPT_ID, EXEC_DEPT_NAME, PROJ_CODE, PROJ_NAME) 完成预聚合后进入维度关联链；
                多个 HIS 执行科室映射至同一绩效核算单元时，final 层按【核算单元 × 项目 × 角色】SUM 收敛为单行，
@@ -128,6 +146,10 @@
   2026-09-14 14:20:00 | 预聚合层解耦重构 | 将角色展开与跨 HIS 科室聚合从 final 层剥离下沉至新增 Intermediate CTE [cte_role_unpivot]（按【核算单元 × 项目 × 角色】GROUP BY，输出 TOTAL_QTY / TOTAL_AMOUNT / TOTAL_EXEC_POINTS）；final 层降级为纯 1:1 契约投影层，取消 GROUP BY 与行级执行比例直取，改为 [总执行积分] ÷ ([总数量] × [单项RVU点数]) 经 NULLIF/ISNULL 防除零反推加权综合执行比例；审计文本公式段同步切换为聚合后标量引用，消除重复 SUM 表达式带来的可读性与执行开销问题；头部纠偏 16 改派归属并新增 18/19 条。
 
   修改日志：
+  2026-09-14 15:10:00 | 审计文本精简与RVU全字段快照 | (1) CALC_PROCESS_TEXT 剔除末段 "+ 0.00000000 = 积分" 无效加数恒等式，精简为「元数据段 | 中文逻辑公式段 | 数学代入算式段」三段式（数学段自身已纯数字收口，不再追加零加结算段），消除格式增熵；
+                                           (2) dim_version_scope 由 6 列精简抽取升级为维表全字段 1:1 直连（23 列，含 VERSION_NO/VERSION_DESC/ORG/SRC_SYS_CODE/MEAS_UNIT/UNIT_PRICE/OPR_LEVEL/审计人时间/DECISION_COFF/EXEC_COFF/REMARK/SCORE_REASON，[ID] 别名 RVU_ID 防与日志表主键 ID 语义碰撞），彻底删除 dim_collapse 收敛 CTE 及其全部 MAX() 聚合，joined 关联目标同步改指 dim_version_scope（行数口径改由维表主键决定，头部纠偏 3 追加单版本单计费单位前提红线）；
+                                           (3) CALC_DETAIL_JSON 在原 15 个扁平标量节点后追加单层嵌套节点 [RVU配置快照]（JSON_QUERY + FOR JSON PATH, WITHOUT_ARRAY_WRAPPER 标量绑定向子查询，23 字段全中文映射，按 PROJ_CODE 1:1 直连 dim_version_scope，零 joined/事实层回表，O(N) 线性）；
+                                           (4) 头部同步修订：依赖契约维表 A 全字段声明、纠偏 3/17 重写、新增纠偏 20、落库契约 JSON 节点口径更新。模板占位符、双区块 Envelope 结构、唯一键与物理落库列零改动。
   2026-09-14 13:00:00 | 性能优化与JSON扁平化 | 剥离 CALC_DETAIL_JSON 内针对 joined 表的嵌套关联子查询（SELECT DISTINCT ... FROM joined ... CROSS APPLY ... FOR JSON PATH）及 RVU配置快照 / 执行比例配置快照 双层嵌套 JSON 包装；重构为单层扁平 15 节点纯内存拼接（零外部表回表），查询复杂度由 O(N×M) 降为 O(N)，消除逐行嵌套扫描导致的 100s+ 性能雪崩；final 及以上计算 CTE 零改动。
   2026-09-14 12:00:00 | 聚合收敛与键冲突修复 | final CTE 由【核算单元 × 执行科室 × 项目 × 角色】收紧为【核算单元 × 项目 × 角色】GROUP BY 预聚合（多 HIS 执行科室映射同一核算单元导致落库键重复，触发唯一约束冲突）；QTY/AMOUNT/EXEC_POINTS 改为 SUM 累加，CALC_PROCESS_TEXT 公式段同步为"汇总数量"，JSON 移除标量执行科室三节点并下沉至 [执行比例配置快照].[执行科室集合] 数组（DISTINCT 追溯）；上游 6 段 CTE 零改动。
   2026-09-14 11:00:00 | 持久化与过滤纠偏 | 参照开单积分脚本完成 Envelope Pattern 双区块物理持久化改造，落库 [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]（ITEM_CODE = ITEM_MED_SVC_EXEC_SCORE）；纠偏出口过滤口径由物理执行科室 [EXEC_DEPT_ID] 改为核算单元 [HPS_DEPT_CODE]；追加四段式 [计算过程描述] 与全量 7 组 JSON 过程仓（含 RVU配置快照 / 执行比例配置快照 双子 JSON）。
@@ -166,8 +188,9 @@ WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
   AND [UNIT_CODE] IN {struct_codes}
 ;
 
--- 2. 算子计算与持久化落库（dept_dict → fact_raw → dim_version_scope → dim_exec_ratio_raw
---    → dim_collapse → joined → cte_role_unpivot → final 计算链路零改动，仅增强过滤口径与 Envelope 包装）
+-- 2. 算子计算与持久化落库（dept_dict → fact_raw → dim_version_scope(全字段) → dim_exec_ratio_raw
+--    → joined → cte_role_unpivot → final 计算链路，仅 dim_collapse 收敛层被整体删除
+--    并以 1:1 直连替代；Envelope 包装、模板占位符与落库列零改动）
 WITH
 -- ── Import CTE: 部门字典桥接层（事实层数值主键 id → 维表业务编码 编码） ──
 dept_dict AS (
@@ -200,15 +223,37 @@ fact_raw AS (
         d.[DEPT_CODE]
 ),
 
--- ── Import CTE: 绩效大类维表作用域（大类剔除在 JOIN 前完成剪枝；仅抽取计算所需列） ──
+-- ── Import CTE: 绩效大类维表作用域（1:1 全字段直接映射，移除 MAX() 聚合与 dim_collapse 收敛层；
+--              大类剔除在 JOIN 前完成剪枝，全字段为下游 JSON 配置快照提供零损耗血缘）
+--              注 1：本块为维表全字段唯一抽取口，[DECISION_COFF] / [EXEC_COFF] 等系数仅随快照留存，
+--                    不参与执行侧任何算术链路；列名与源表物理列保持 1:1，禁止在此叠加别名改写。
+--              注 2：[ID] 是维表的"系统冗余错误功能"列，别名 RVU_ID —— 若原名透传会与
+--                    DWD_FIN_CALC_ALLOC1_DETAIL_LOG 的 IDENTITY 主键 [ID] 语义碰撞。 ──
 dim_version_scope AS (
     SELECT
+        b.[VERSION_NO],
+        b.[VERSION_DESC],
+        b.[ORG_CODE],
+        b.[ORG_NAME],
+        b.[SRC_SYS_CODE],
         b.[PROJ_CODE],
-        b.[MEAS_UNIT],
         b.[PROJ_NAME],
+        b.[MEAS_UNIT],
+        CAST(b.[RVU_VAL] AS DECIMAL(18,8))        AS RVU_VAL,
         b.[ITEM_CAT_CODE],
         b.[ITEM_CAT_NAME],
-        b.[RVU_VAL]
+        CAST(b.[UNIT_PRICE] AS DECIMAL(18,8))     AS UNIT_PRICE,
+        b.[OPR_LEVEL_CODE],
+        b.[OPR_LEVEL_NAME],
+        b.[CREATE_USER],
+        b.[CREATE_TIME],
+        b.[UPDATE_USER],
+        b.[UPDATE_TIME],
+        b.[ID]                                    AS RVU_ID,
+        CAST(b.[DECISION_COFF] AS DECIMAL(18,8))  AS DECISION_COFF,
+        CAST(b.[EXEC_COFF] AS DECIMAL(18,8))      AS EXEC_COFF,
+        b.[REMARK],
+        b.[SCORE_REASON]
     FROM dbo.[DIM_PRF_ITEM_RVU_VERSION] AS b WITH (NOLOCK)
     WHERE b.[ITEM_CAT_CODE] NOT IN ('1101', '1041')
       AND b.[PROJ_CODE] IS NOT NULL
@@ -232,21 +277,8 @@ dim_exec_ratio_raw AS (
     WHERE r.[IS_ENABLED] = 1
 ),
 
--- ── Logical CTE: 维度系数收敛（同一 PROJ_CODE 多计费单位/多机构分支拉平，防最外层输出被维度污染；
---              仅保留执行积分所需 RVU_VAL，DECISION_COFF 属开单侧语义已裁剪） ──
-dim_collapse AS (
-    SELECT
-        d.[PROJ_CODE],
-        MAX(d.[PROJ_NAME])                          AS CAT_PROJ_NAME,
-        MAX(d.[ITEM_CAT_CODE])                      AS ITEM_CAT_CODE,
-        MAX(d.[ITEM_CAT_NAME])                      AS ITEM_CAT_NAME,
-        MAX(CAST(d.[RVU_VAL]       AS DECIMAL(18,8))) AS RVU_VAL
-    FROM dim_version_scope AS d
-    GROUP BY d.[PROJ_CODE]
-),
-
--- ── Logical CTE: 事实(聚合) × 绩效大类 × 医技护执行划分 关联（【执行科室 × 项目】粒度，
---              此层维持宽表三角色并列，供 final 层 CROSS APPLY 行转列消费） ──
+-- ── Logical CTE: 事实(聚合) × 绩效大类(全字段 1:1) × 医技护执行划分 关联
+--              （【执行科室 × 项目】粒度，此层维持宽表三角色并列，供下游 CROSS APPLY 行转列消费） ──
 joined AS (
     SELECT
         DATEADD(MONTH, 1, DATEFROMPARTS(CAST('{year}' AS INT), CAST('{month}' AS INT), 1)) AS BIZ_EPOCH,
@@ -270,7 +302,7 @@ joined AS (
         x.[NURSE_HPS_DEPT_CODE],
         x.[NURSE_HPS_DEPT_NAME]
     FROM fact_raw AS f
-    INNER JOIN dim_collapse AS c
+    INNER JOIN dim_version_scope AS c
         ON f.[PROJ_CODE] = c.[PROJ_CODE]
     LEFT JOIN dim_exec_ratio_raw AS x
         ON f.[EXEC_DEPT_CODE_KEY] = x.[HIS_DEPT_CODE]
@@ -333,12 +365,13 @@ final AS (
         r.[TOTAL_QTY]                                                                                     AS QTY,
         r.[TOTAL_AMOUNT]                                                                                  AS AMOUNT,
         r.[TOTAL_EXEC_POINTS]                                                                             AS EXEC_POINTS,
+        -- 三段式审计文本：[元数据段] | [中文逻辑公式段] | [纯数学代入算式段 = 最终积分]
+        -- 已剔除原 "积分 + 0.00000000 = 积分" 无效加数恒等段（恒等零加增熵），
+        -- 末段直接收敛至最终执行积分，数学算式自身已完成唯一数字收口
         '医疗服务执行积分 | 科室项目角色执行积分 = 汇总数量 × 单项RVU点数 × 执行比例 | '
             + CAST(r.[TOTAL_QTY] AS VARCHAR(50)) + ' × '
             + CAST(r.[RVU_VAL] AS VARCHAR(50)) + ' × '
             + CAST(CAST(ISNULL(r.[TOTAL_EXEC_POINTS] / NULLIF(r.[TOTAL_QTY] * r.[RVU_VAL], 0), 0) AS DECIMAL(18,8)) AS VARCHAR(50)) + ' = '
-            + CAST(r.[TOTAL_EXEC_POINTS] AS VARCHAR(50)) + ' | '
-            + CAST(r.[TOTAL_EXEC_POINTS] AS VARCHAR(50)) + ' + 0.00000000 = '
             + CAST(r.[TOTAL_EXEC_POINTS] AS VARCHAR(50))                                              AS CALC_PROCESS_TEXT
     FROM cte_role_unpivot AS r
 )
@@ -381,7 +414,38 @@ SELECT
             CAST(f.[QTY]         AS DECIMAL(18,8))      AS [汇总数量],
             CAST(f.[AMOUNT]      AS DECIMAL(18,8))      AS [汇总金额],
             CAST(f.[EXEC_POINTS] AS DECIMAL(18,8))      AS [最终执行积分],
-            f.[CALC_PROCESS_TEXT]                       AS [计算过程描述]
+            f.[CALC_PROCESS_TEXT]                       AS [计算过程描述],
+            -- RVU 配置全字段快照（FOR JSON PATH 纯常量投影，零表回表；按 PROJ_CODE 1:1 直连 dim_version_scope）
+            -- 注：与同级扁平节点互不干扰，位于根对象内联；父级 WITHOUT_ARRAY_WRAPPER 必须保留
+            JSON_QUERY((
+                SELECT
+                    c.[VERSION_NO]       AS [版本号],
+                    c.[VERSION_DESC]     AS [版本描述],
+                    c.[ORG_CODE]         AS [机构编码],
+                    c.[ORG_NAME]         AS [机构名称],
+                    c.[SRC_SYS_CODE]     AS [源系统编码],
+                    c.[PROJ_CODE]        AS [收费项目编码],
+                    c.[PROJ_NAME]        AS [收费项目名称],
+                    c.[MEAS_UNIT]        AS [原始计费单位],
+                    c.[RVU_VAL]          AS [单项绩效点数],
+                    c.[ITEM_CAT_CODE]    AS [绩效核算大类编码],
+                    c.[ITEM_CAT_NAME]    AS [绩效核算大类名称],
+                    c.[UNIT_PRICE]       AS [历史参考单价],
+                    c.[OPR_LEVEL_CODE]   AS [手术等级编码],
+                    c.[OPR_LEVEL_NAME]   AS [手术等级名称],
+                    c.[CREATE_USER]      AS [创建人],
+                    CONVERT(VARCHAR(19), c.[CREATE_TIME], 120) AS [创建时间],
+                    c.[UPDATE_USER]      AS [修改人],
+                    CONVERT(VARCHAR(19), c.[UPDATE_TIME], 120) AS [修改时间],
+                    c.[RVU_ID]           AS [冗余ID],
+                    c.[DECISION_COFF]    AS [诊疗决策系数],
+                    c.[EXEC_COFF]        AS [执行系数],
+                    c.[REMARK]           AS [备注说明],
+                    c.[SCORE_REASON]     AS [评分理由依据]
+                FROM dim_version_scope AS c
+                WHERE c.[PROJ_CODE] = f.[PROJ_CODE]
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            ))                                          AS [RVU配置快照]
         FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
     )                                               AS [CALC_DETAIL_JSON],
     SYSDATETIME()                                   AS [CREATE_TIME]
