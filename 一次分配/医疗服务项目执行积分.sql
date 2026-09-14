@@ -61,20 +61,25 @@
      输出 SUM(数量) 与 SUM(金额)；[执行时间] 与 [单价] 不再向上游沉淀。
      价值：同一科室同一项目的成百上千笔收费明细在此坍缩为单行，压降 90%+ 物理行数，
      使后续维度关联与出口 IO 成本与【科室 × 项目】数量级对齐，而非与收费笔数对齐。
-  11.【平均单价语义】原 [单价] 为单笔成交价，聚合后无单一取值可代表全组，
-     故出口按加权平均还原为 [平均单价] = SUM(金额) ÷ SUM(数量)，
-     并以 CASE WHEN SUM(数量) <> 0 守卫零除（数量为 0 或冲红抵消时兜底 0.00000000）。
-     该列是导出型度量，不具备独立聚合可加性，严禁下游再做 SUM 或 AVG。
+  11.【字段裁剪·单价语义】[平均单价] 仅为原 [单价] 聚合后的还原度量（导出型展示列），
+     不具备独立聚合可加性，且下游执行积分切分（数量 × 执行比例 × RVU）全程不依赖单价，
+     故已在 dim_version_scope / dim_collapse / joined / final 及出口契约中全量移除，
+     同步消除零除守卫与除法算子开销。若后续确需单价，须重新走 SUM(金额) ÷ SUM(数量) 还原。
   12.【账期哨兵】聚合后 [执行时间] 已被消除，但下游维表（如拉链映射）可能需要账期时点
      做半开区间匹配。故在出口携带 BIZ_EPOCH = 次月 1 日 00:00:00（账期右端点哨兵），
      以常量穿越 CTE 链而非污染聚合键；该列不作为业务时点列对外输出。
+  13.【字段裁剪·诊疗决策系数】[DECISION_COFF] 属开单侧决策语义，仅服务于
+     医疗服务项目开单积分（数量 × RVU_VAL × DECISION_COFF），与执行侧拆算无因果关系。
+     为杜绝无关维度污染执行积分链路与冗余 I/O，已从维表抽取（dim_version_scope）、
+     维度收敛（dim_collapse）、关联层（joined）、final 及出口契约全量移除；
+     维表 A 契约中 [DECISION_COFF] 列保留声明以维持 DDL 血缘可追溯性。
 
   ── 模板占位符（严禁破坏） ──
   '{year}'      : 核算年份, 4 位数字文本, 默认 '2025'
   '{month}'     : 核算月份, 1-12 文本, 默认 '6'
   {struct_codes}: 科室代码过滤集, 英文逗号分隔; 留空则不过滤
-  输出契约   : 执行科室代码 / 执行科室 / 项目代码 / 项目名称 / 数量 / 平均单价 / 金额
-               / 绩效核算大类代码 / 绩效核算大类名称 / 单项RVU点数 / 诊疗决策系数
+  输出契约   : 执行科室代码 / 执行科室 / 项目代码 / 项目名称 / 数量 / 金额
+               / 绩效核算大类代码 / 绩效核算大类名称 / 单项RVU点数
                / 医生执行比例 / 技师执行比例 / 护士执行比例
                / 医生核算单元编码 / 医生核算单元名称
                / 技师核算单元编码 / 技师核算单元名称
@@ -87,6 +92,7 @@
                严禁作为业务时点列对外输出，严禁参与聚合或分组。
 
   修改日志：
+  2026-09-14 10:15:00 | 字段裁剪与规范对齐 | 移除平均单价(AVG_UNIT_PRICE)与诊疗决策系数(DECISION_COFF)字段输出与相关计算逻辑；补齐文件相对路径与链路注释。
   2026-09-14 10:05:00 | 粒度收敛聚合 | 移除 [执行时间] 维度与明细输出；事实层按 (执行科室代码, 执行科室, 项目代码, 项目名称) 进行 GROUP BY 聚合，输出 SUM(数量) 与 SUM(金额)，大幅减少物理行数。
   2026-09-14 09:50:00 | 关联修复与裁剪 | 彻底移除开单科室代码/名称输出；通过 sjjk_bmb_2025_06_01 桥接事实层 执行科室代码 (id) 与维表 HIS_DEPT_CODE (编码) 的主键关联。
   2026-09-14 07:00:00 | 重构熵减 | 按系统单版本假设，移除 VERSION_NO 窗口函数收敛逻辑，降低计算熵值与算子开销：
@@ -136,7 +142,7 @@ fact_raw AS (
         d.[DEPT_CODE]
 ),
 
--- ── Import CTE: 绩效大类维表作用域（大类剔除在 JOIN 前完成剪枝） ──
+-- ── Import CTE: 绩效大类维表作用域（大类剔除在 JOIN 前完成剪枝；仅抽取计算所需列） ──
 dim_version_scope AS (
     SELECT
         b.[PROJ_CODE],
@@ -144,8 +150,7 @@ dim_version_scope AS (
         b.[PROJ_NAME],
         b.[ITEM_CAT_CODE],
         b.[ITEM_CAT_NAME],
-        b.[RVU_VAL],
-        b.[DECISION_COFF]
+        b.[RVU_VAL]
     FROM dbo.[DIM_PRF_ITEM_RVU_VERSION] AS b WITH (NOLOCK)
     WHERE b.[ITEM_CAT_CODE] NOT IN ('1101', '1041')
       AND b.[PROJ_CODE] IS NOT NULL
@@ -169,15 +174,15 @@ dim_exec_ratio_raw AS (
     WHERE r.[IS_ENABLED] = 1
 ),
 
--- ── Logical CTE: 维度系数收敛（同一 PROJ_CODE 多计费单位/多机构分支拉平，防最外层输出被维度污染） ──
+-- ── Logical CTE: 维度系数收敛（同一 PROJ_CODE 多计费单位/多机构分支拉平，防最外层输出被维度污染；
+--              仅保留执行积分所需 RVU_VAL，DECISION_COFF 属开单侧语义已裁剪） ──
 dim_collapse AS (
     SELECT
         d.[PROJ_CODE],
         MAX(d.[PROJ_NAME])                          AS CAT_PROJ_NAME,
         MAX(d.[ITEM_CAT_CODE])                      AS ITEM_CAT_CODE,
         MAX(d.[ITEM_CAT_NAME])                      AS ITEM_CAT_NAME,
-        MAX(CAST(d.[RVU_VAL]       AS DECIMAL(18,8))) AS RVU_VAL,
-        MAX(CAST(d.[DECISION_COFF] AS DECIMAL(18,8))) AS DECISION_COFF
+        MAX(CAST(d.[RVU_VAL]       AS DECIMAL(18,8))) AS RVU_VAL
     FROM dim_version_scope AS d
     GROUP BY d.[PROJ_CODE]
 ),
@@ -196,7 +201,6 @@ joined AS (
         c.[ITEM_CAT_CODE],
         c.[ITEM_CAT_NAME],
         c.[RVU_VAL],
-        c.[DECISION_COFF],
         ISNULL(x.[DOC_EXEC_RATIO],   CAST(0.00000000 AS DECIMAL(18,8))) AS DOC_EXEC_RATIO,
         ISNULL(x.[TECH_EXEC_RATIO],  CAST(0.00000000 AS DECIMAL(18,8))) AS TECH_EXEC_RATIO,
         ISNULL(x.[NURSE_EXEC_RATIO], CAST(0.00000000 AS DECIMAL(18,8))) AS NURSE_EXEC_RATIO,
@@ -214,7 +218,8 @@ joined AS (
        AND f.[PROJ_CODE]          = x.[ITEM_CODE]
 ),
 
--- ── Final CTE: 出口契约（执行科室过滤落位于最外层，隔离过滤维度不污染关联链路） ──
+-- ── Final CTE: 出口契约（执行科室过滤落位于最外层，隔离过滤维度不污染关联链路；
+--              已剥离 AVG_UNIT_PRICE 派生运算与 DECISION_COFF 透传，出口与关联链严格同列） ──
 final AS (
     SELECT
         CAST('{year}'  AS VARCHAR(10)) AS CALC_YEAR,
@@ -225,15 +230,10 @@ final AS (
         j.[PROJ_CODE],
         j.[PROJ_NAME],
         j.[QTY],
-        CASE WHEN j.[QTY] <> CAST(0 AS DECIMAL(18,8))
-             THEN CAST(j.[AMOUNT] / j.[QTY] AS DECIMAL(18,8))
-             ELSE CAST(0.00000000 AS DECIMAL(18,8))
-        END                            AS AVG_UNIT_PRICE,
         j.[AMOUNT],
         j.[ITEM_CAT_CODE],
         j.[ITEM_CAT_NAME],
         j.[RVU_VAL],
-        j.[DECISION_COFF],
         j.[DOC_EXEC_RATIO],
         j.[TECH_EXEC_RATIO],
         j.[NURSE_EXEC_RATIO],
@@ -255,12 +255,10 @@ SELECT
    ,f.[PROJ_CODE]                AS [项目代码]
    ,f.[PROJ_NAME]                AS [项目名称]
    ,f.[QTY]                      AS [数量]
-   ,f.[AVG_UNIT_PRICE]           AS [平均单价]
    ,f.[AMOUNT]                   AS [金额]
    ,f.[ITEM_CAT_CODE]            AS [绩效核算大类代码]
    ,f.[ITEM_CAT_NAME]            AS [绩效核算大类名称]
    ,f.[RVU_VAL]                  AS [单项RVU点数]
-   ,f.[DECISION_COFF]            AS [诊疗决策系数]
    ,f.[DOC_EXEC_RATIO]           AS [医生执行比例]
    ,f.[TECH_EXEC_RATIO]          AS [技师执行比例]
    ,f.[NURSE_EXEC_RATIO]         AS [护士执行比例]
