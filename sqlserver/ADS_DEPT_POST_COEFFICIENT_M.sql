@@ -40,8 +40,8 @@ CREATE TABLE [dbo].[ads_dept_post_coefficient_m] (
     [post_name]         VARCHAR(100)    NOT NULL,       -- 职务标签：科主任、护士长、护理组长、普通医生、普通护士
 
     -- 5. 系数与考勤度量
-    [post_coefficient]  DECIMAL(18, 4)  NOT NULL DEFAULT 1.0000,  -- 岗位系数
-    [on_duty_days]      DECIMAL(18, 2)  NOT NULL DEFAULT 0.00,    -- 月度实际在岗天数
+    [post_coefficient]  DECIMAL(18, 8)  NOT NULL DEFAULT 1.0000,  -- 岗位系数
+    [on_duty_days]      DECIMAL(18, 8)  NOT NULL DEFAULT 0.00,    -- 月度实际在岗天数
 
     -- 6. 月中转科标识（原 2026-08-11 增量 Patch，已并入建表基线）
     [is_transferred]    VARCHAR(10)     NOT NULL CONSTRAINT df_ads_dept_post_coefficient_m_is_transferred DEFAULT '否',
