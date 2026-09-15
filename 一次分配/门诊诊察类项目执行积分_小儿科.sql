@@ -3,6 +3,7 @@
   脚本名称: 门诊诊察类项目执行积分_小儿科.sql
   业务说明: 门诊诊察类项目（1043）按日汇总执行数据。
             依据开单科室代码 (36) 进行源头硬隔离（仅保留 36），供下游按执行核算单元汇总消费。
+            投影粒度已剥离开单环节（科室/人员/日期 7 维）与对应映射链路，仅保留执行环节维度。
   学科系数: 恒定 1.1（源头已隔离，投影层常量化）
 
   ── 硬约束（禁止回退） ──
@@ -10,6 +11,10 @@
   （如 = N'小儿科'）。名称属前端/HIS 可维护文案，一旦改名即静默失效且不报错。
 
   修改日志：
+  2026-09-15 17:50:00 | 维度剪枝 | 剥离开单环节 7 维投影与分组（开单科室代码/开单科室/开单绩效核算单元编码/
+                                 名称/开单人员代码/开单人/开单日期），同步移除 bmb_open+map_open 映射链路，
+                                 聚合粒度收敛至纯执行清单维度；cte_rvu/cte_bmb/cte_dept_map 定义零改动，
+                                 WHERE 仍以基表列 f.[开单科室代码] 硬隔离，GROUP BY 零常量。
   2026-09-15 17:20:00 | 语法修复 | 剔除 GROUP BY 子句中的纯常量表达式 CAST(1.1 AS DECIMAL(18,8))
                                  （触发 42000/164 每个 GROUP BY 表达式必须至少包含一个不是外部引用的列）；
                                  SELECT 投影层常量定义原样保留，CTE/关联/精度零变动。
@@ -75,15 +80,6 @@ SELECT
    ,SUM(CAST(f.[数量] AS DECIMAL(18,8)))                      AS [数量]
    ,SUM(CAST(f.[金额] AS DECIMAL(18,8)))                      AS [金额]
 
-    -- ── 开单环节（id → 编码 → 绩效核算单元；时间为按日截断） ──
-   ,f.[开单科室代码]                                          AS [开单科室代码]
-   ,f.[开单科室]                                              AS [开单科室]
-   ,map_open.[HPS_DEPT_CODE]                                  AS [开单绩效核算单元编码]
-   ,map_open.[HPS_DEPT_NAME]                                  AS [开单绩效核算单元名称]
-   ,f.[开单人员代码]                                          AS [开单人员代码]
-   ,f.[开单人]                                                AS [开单人]
-   ,CAST(f.[开单时间] AS DATE)                                 AS [开单日期]
-
     -- ── 绩效调整因子（学科系数：源头已隔离为小儿科，退化为常量 1.1） ──
    ,CAST(1.1 AS DECIMAL(18,8))                                AS [学科系数]
 
@@ -101,11 +97,6 @@ SELECT
 FROM dbo.[PF临时医疗服务项目26A] AS f WITH (NOLOCK)
 INNER JOIN cte_rvu AS v
     ON f.[项目代码] = v.[PROJ_CODE]
--- 开单科室链路：id → 部门编码 → 绩效核算单元（全程 LEFT JOIN，未配置映射不收缩事实行）
-LEFT JOIN cte_bmb AS bmb_open
-    ON f.[开单科室代码] = bmb_open.[id]
-LEFT JOIN cte_dept_map AS map_open
-    ON bmb_open.[dept_code] = map_open.[HIS_DEPT_CODE]
 -- 执行科室链路：id → 部门编码 → 绩效核算单元（全程 LEFT JOIN，未配置映射不收缩事实行）
 LEFT JOIN cte_bmb AS bmb_exec
     ON f.[执行科室代码] = bmb_exec.[id]
@@ -123,13 +114,6 @@ GROUP BY
    ,v.[RVU_VAL]
    ,v.[EXEC_COFF]
    ,CAST(f.[单价] AS DECIMAL(18,8))
-   ,f.[开单科室代码]
-   ,f.[开单科室]
-   ,map_open.[HPS_DEPT_CODE]
-   ,map_open.[HPS_DEPT_NAME]
-   ,f.[开单人员代码]
-   ,f.[开单人]
-   ,CAST(f.[开单时间] AS DATE)
    ,f.[执行科室代码]
    ,f.[执行科室]
    ,map_exec.[HPS_DEPT_CODE]
