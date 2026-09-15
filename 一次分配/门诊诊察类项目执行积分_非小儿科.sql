@@ -11,6 +11,7 @@
   （如 <> N'小儿科'）。名称属前端/HIS 可维护文案，一旦改名即静默失效且不报错。
 
   修改日志：
+  2026-09-15 19:10:00 | 维度调整与空值兜底 | 增加缴费日期年月列；剔除物理执行科室代码/名称；执行绩效核算单元编码/名称空值填充为'未匹配'。
   2026-09-15 17:50:00 | 维度剪枝 | 剥离开单环节 7 维投影与分组（开单科室代码/开单科室/开单绩效核算单元编码/
                                  名称/开单人员代码/开单人/开单日期），同步移除 bmb_open+map_open 映射链路，
                                  聚合粒度收敛至纯执行清单维度；cte_rvu/cte_bmb/cte_dept_map 定义零改动，
@@ -85,16 +86,16 @@ SELECT
    ,CAST(1.0 AS DECIMAL(18,8))                                AS [学科系数]
 
     -- ── 执行环节（门诊诊察类绩效归属的核心维度；id → 编码 → 绩效核算单元） ──
-   ,f.[执行科室代码]                                          AS [执行科室代码]
-   ,f.[执行科室]                                              AS [执行科室]
-   ,map_exec.[HPS_DEPT_CODE]                                  AS [执行绩效核算单元编码]
-   ,map_exec.[HPS_DEPT_NAME]                                  AS [执行绩效核算单元名称]
+   ,ISNULL(map_exec.[HPS_DEPT_CODE], N'未匹配')                AS [执行绩效核算单元编码]
+   ,ISNULL(map_exec.[HPS_DEPT_NAME], N'未匹配')                AS [执行绩效核算单元名称]
    ,f.[执行人员代码]                                          AS [执行人员代码]
    ,f.[执行人员]                                              AS [执行人员]
    ,CAST(f.[执行时间] AS DATE)                                 AS [执行日期]
 
-    -- ── 结算环节（时间为按日截断） ──
+    -- ── 结算环节（时间为按日截断 + 年月维度展开） ──
    ,CAST(f.[缴费时间] AS DATE)                                 AS [缴费日期]
+   ,YEAR(f.[缴费时间])                                        AS [缴费日期年份]
+   ,MONTH(f.[缴费时间])                                       AS [缴费日期月份]
 FROM dbo.[PF临时医疗服务项目26A] AS f WITH (NOLOCK)
 INNER JOIN cte_rvu AS v
     ON f.[项目代码] = v.[PROJ_CODE]
@@ -116,12 +117,12 @@ GROUP BY
    ,v.[RVU_VAL]
    ,v.[EXEC_COFF]
    ,CAST(f.[单价] AS DECIMAL(18,8))
-   ,f.[执行科室代码]
-   ,f.[执行科室]
-   ,map_exec.[HPS_DEPT_CODE]
-   ,map_exec.[HPS_DEPT_NAME]
+   ,ISNULL(map_exec.[HPS_DEPT_CODE], N'未匹配')
+   ,ISNULL(map_exec.[HPS_DEPT_NAME], N'未匹配')
    ,f.[执行人员代码]
    ,f.[执行人员]
    ,CAST(f.[执行时间] AS DATE)
    ,CAST(f.[缴费时间] AS DATE)
+   ,YEAR(f.[缴费时间])
+   ,MONTH(f.[缴费时间])
 ;
