@@ -4,6 +4,7 @@
 -- Relative Path : sqlserver/ADS_DEPT_POST_COEFFICIENT_M.sql
 -- =================================================================
 -- 修改日志
+-- 2026-09-15 15:00:00 | 维度补全 | 在员工身份维度区块增补 [series_code] (所属职系编码) 与 [series_name] (所属职系名称) 字段及对应元数据注释。
 -- 2026-09-15 14:45:00 | 规范重构 | 遵循新表规范将表名及全量字段重构为全小写下划线；将 [DEPT_CODE]/[DEPT_NAME] 抽象重构为 [unit_code]/[unit_name] (核算单元编码/名称)。
 -- 2026-09-15 14:39:00 | 项目适配重构 | 移除 [STAFF_TYPE] (军文/聘用) 字段与相关注释；合并历史增量 Patch 至建表基线（IS_TRANSFERRED 与五元联合主键）。
 -- 2026-08-17 11:13:46 | 主键升级：将联合主键由 (YEAR, MONTH, DEPT_CODE, STAFF_CODE) 升维为 (YEAR, MONTH, DEPT_CODE, STAFF_CODE, POST_CODE)，支持同一员工同一账期多岗位天数拆分。
@@ -31,6 +32,8 @@ CREATE TABLE [dbo].[ads_dept_post_coefficient_m] (
     [staff_code]        VARCHAR(50)     NOT NULL,       -- 员工编码
     [staff_name]        VARCHAR(100)    NOT NULL,       -- 员工姓名
     [staff_sequence]    VARCHAR(50)     NOT NULL,       -- 联合切片键：对齐考核表，区分 医疗 / 护理
+    [series_code]       VARCHAR(50)     NOT NULL,       -- 所属职系编码
+    [series_name]       VARCHAR(100)    NOT NULL,       -- 所属职系名称
 
     -- 4. 职务标签（双重锁定：编码驱动系统逻辑，名称还原前端展示）
     [post_code]         VARCHAR(50)     NOT NULL,       -- 核心防御：岗位物理编码（如 DIR_01, NUR_01）
@@ -74,6 +77,8 @@ EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'核算单�
 EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'员工编码', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'ads_dept_post_coefficient_m', @level2type = N'COLUMN', @level2name = N'staff_code';
 EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'员工姓名', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'ads_dept_post_coefficient_m', @level2type = N'COLUMN', @level2name = N'staff_name';
 EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'员工序列：联合切片键，对齐考核表区分医疗/护理', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'ads_dept_post_coefficient_m', @level2type = N'COLUMN', @level2name = N'staff_sequence';
+EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'所属职系编码', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'ads_dept_post_coefficient_m', @level2type = N'COLUMN', @level2name = N'series_code';
+EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'所属职系名称', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'ads_dept_post_coefficient_m', @level2type = N'COLUMN', @level2name = N'series_name';
 EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'岗位物理编码：系统级逻辑锁定键，如 DIR_01 主任岗、NUR_01 护士长岗', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'ads_dept_post_coefficient_m', @level2type = N'COLUMN', @level2name = N'post_code';
 EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'职务标签名称：前端展示还原科主任、护士长、护理组长、普通医生、普通护士', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'ads_dept_post_coefficient_m', @level2type = N'COLUMN', @level2name = N'post_name';
 EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'岗位系数，默认 1.0000', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'ads_dept_post_coefficient_m', @level2type = N'COLUMN', @level2name = N'post_coefficient';
