@@ -265,10 +265,9 @@ LEFT JOIN cte_ryb AS ryb_staff
     ON f.[执行人员代码] = ryb_staff.[id]
 LEFT JOIN cte_mdm_staff AS mdm_exec_staff
     ON ryb_staff.[src_staff_code] = mdm_exec_staff.[src_staff_code]
-    ~
     ;
+    ~
 
-~
 -- 第二区块：最外层接口读取块（查询明细时仅执行此块，严格承接 struct_code / struct_name / result_value 契约）
 WITH CTE_DWD_READ_ALIAS AS (
     SELECT
