@@ -45,6 +45,14 @@
   {struct_codes} : 核算单元过滤集 (如 ('10001', '10002'))
 
   修改日志：
+  2026-09-16 19:45:00 | JSON 过程仓扩展 | cte_rvu 由 5 列升级为全字段收敛（追加 VERSION_NO/VERSION_DESC/ORG_CODE/
+                                   ORG_NAME/SRC_SYS_CODE/PROJ_NAME/MEAS_UNIT/OPR_LEVEL_CODE/OPR_LEVEL_NAME/
+                                   CREATE_USER/CREATE_TIME/UPDATE_USER/UPDATE_TIME/REMARK/SCORE_REASON 及
+                                   DECISION_COFF/UNIT_PRICE，数值列统一 CAST DECIMAL(18,8)，字符列 MAX() 收敛）；
+                                   [RVU配置快照] 由 5 节点扩至 22 节点全字段血缘；CALC_DETAIL_JSON 外层补齐
+                                   DWD 物理列同源标量节点（核算项编码/核算项名称/脚本名称/执行角色/员工编码/
+                                   员工姓名/值类型/最终结果/计算过程描述），实现列化落库与 JSON 穿透双轨同源。
+                                   双区块隔离、物理列落库逻辑与积分算式零改动。
   2026-09-16 18:30:00 | 架构持久化 | Envelope Pattern 双区块重构：第一区块前置幂等 DELETE（按 CALC_YEAR/CALC_MONTH/
                                    ITEM_CODE/UNIT_CODE 清理，清场范围 ⊇ UQ 八维前缀），计算链路收敛后 INSERT 落至
                                    dbo.DWD_FIN_CALC_ALLOC1_DETAIL_LOG（ITEM_CODE='ITEM_OUTPATIENT_DIAG_SCORE_NON_PED'，
@@ -80,14 +88,32 @@ WHERE [CALC_YEAR]  = YEAR(CAST('{start_time}' AS DATETIME))
 -- 2. 算子计算与持久化落库（cte_rvu → cte_ryb → cte_mdm_staff → cte_staff_post → final 计算链路；
 --    Envelope 包装、模板占位符与落库列对齐一次分配专用物理表）
 WITH
--- ── Import CTE: 绩效大类维表作用域（大类 1043 前置剪枝 + 按 PROJ_CODE 聚合收敛防卡特兰积） ──
+-- ── Import CTE: 绩效大类维表作用域（大类 1043 前置剪枝 + 按 PROJ_CODE 聚合收敛防卡特兰积，
+--    并全字段收敛供 [RVU配置快照] 留存完整维度血缘） ──
 cte_rvu AS (
     SELECT
         v0.[PROJ_CODE]                              AS PROJ_CODE
+       ,MAX(v0.[VERSION_NO])                        AS VERSION_NO
+       ,MAX(v0.[VERSION_DESC])                      AS VERSION_DESC
+       ,MAX(v0.[ORG_CODE])                          AS ORG_CODE
+       ,MAX(v0.[ORG_NAME])                          AS ORG_NAME
+       ,MAX(v0.[SRC_SYS_CODE])                      AS SRC_SYS_CODE
+       ,MAX(v0.[PROJ_NAME])                         AS PROJ_NAME
+       ,MAX(v0.[MEAS_UNIT])                         AS MEAS_UNIT
        ,MAX(v0.[ITEM_CAT_CODE])                     AS ITEM_CAT_CODE
        ,MAX(v0.[ITEM_CAT_NAME])                     AS ITEM_CAT_NAME
-       ,CAST(MAX(v0.[RVU_VAL])   AS DECIMAL(18,8))  AS RVU_VAL
-       ,CAST(MAX(v0.[EXEC_COFF]) AS DECIMAL(18,8))  AS EXEC_COFF
+       ,MAX(v0.[OPR_LEVEL_CODE])                    AS OPR_LEVEL_CODE
+       ,MAX(v0.[OPR_LEVEL_NAME])                    AS OPR_LEVEL_NAME
+       ,MAX(v0.[CREATE_USER])                       AS CREATE_USER
+       ,MAX(v0.[CREATE_TIME])                       AS CREATE_TIME
+       ,MAX(v0.[UPDATE_USER])                       AS UPDATE_USER
+       ,MAX(v0.[UPDATE_TIME])                       AS UPDATE_TIME
+       ,MAX(v0.[REMARK])                            AS REMARK
+       ,MAX(v0.[SCORE_REASON])                      AS SCORE_REASON
+       ,CAST(MAX(v0.[RVU_VAL])       AS DECIMAL(18,8))  AS RVU_VAL
+       ,CAST(MAX(v0.[EXEC_COFF])     AS DECIMAL(18,8))  AS EXEC_COFF
+       ,CAST(MAX(v0.[DECISION_COFF]) AS DECIMAL(18,8))  AS DECISION_COFF
+       ,CAST(MAX(v0.[UNIT_PRICE])    AS DECIMAL(18,8))  AS UNIT_PRICE
     FROM dbo.[DIM_PRF_ITEM_RVU_VERSION] AS v0 WITH (NOLOCK)
     WHERE v0.[PROJ_CODE] IS NOT NULL
       AND v0.[ITEM_CAT_CODE] = '1043'
@@ -253,34 +279,72 @@ SELECT
         SELECT
             CAST(f.[缴费日期年份] AS VARCHAR(11))                  AS [核算年份],
             CAST(f.[缴费日期月份] AS VARCHAR(11))                  AS [核算月份],
+            -- ===== 核算项维度（与 DWD 落库列 CALC_YEAR/CALC_MONTH/ITEM_CODE/ITEM_NAME/SCRIPT_NAME 同源同值）=====
+            N'ITEM_OUTPATIENT_DIAG_SCORE_NON_PED'                  AS [核算项编码],
+            N'门诊诊察类项目执行积分_非小儿科'                      AS [核算项名称],
+            N'门诊诊察类项目执行积分_非小儿科.sql'                  AS [脚本名称],
+            -- ===== 核算单元 / 项目 / 大类维度（与 DWD 落库列 UNIT_CODE/UNIT_NAME/PROJ_CODE/PROJ_NAME/ITEM_CAT_CODE/ITEM_CAT_NAME 同源同值）=====
             f.[执行人员所在核算单元编码]                             AS [核算单元编码],
             f.[执行人员所在核算单元名称]                             AS [核算单元名称],
             f.[项目代码]                                          AS [项目代码],
             f.[项目名称]                                          AS [项目名称],
             f.[绩效大类编码]                                      AS [绩效核算大类代码],
             f.[绩效大类名称]                                      AS [绩效核算大类名称],
+            -- ===== 执行角色 / 员工维度（与 DWD 落库列 EXEC_ROLE/STAFF_CODE/STAFF_NAME 同源，常量与兜底表达式逐字对齐）=====
+            N'执行人员'                                            AS [执行角色],
+            ISNULL(mdm_exec_staff.[staff_code], N'未匹配')          AS [员工编码],
+            f.[执行人员]                                          AS [员工姓名],
+            -- ===== 日期类型维度（与 DWD 落库列 DAY_TYPE_CODE/DAY_TYPE_NAME 同源同值）=====
+            f.[日期类型编码]                                      AS [日期类型编码],
+            f.[日期类型名称]                                      AS [日期类型名称],
+            -- ===== 值口径（与 DWD 落库列 FINAL_VALUE_TYPE/FINAL_VALUE/TOTAL_QTY 同源同值）=====
+            N'SCORE'                                             AS [值类型],
+            CAST(f.[积分] AS DECIMAL(18,8))                        AS [最终结果],
+            CAST(f.[数量] AS DECIMAL(18,8))                        AS [汇总数量],
+            -- ===== 计算过程描述（与 DWD 落库列 CALC_PROCESS_TEXT 完全同源同文本）=====
+            CONCAT(
+                N'门诊诊察类项目执行积分_非小儿科 | 门诊诊察类执行积分 = 项目点数 × 汇总数量 × 学科系数 × 绩效核算系数 | '
+               ,f.[积分计算过程]
+               ,' = '
+               ,CAST(CAST(f.[积分] AS DECIMAL(18,8)) AS VARCHAR(50))
+            )                                                     AS [计算过程描述],
+            -- ===== 过程因子（未落物理列，仅 JSON 过程仓承载）=====
             CAST(f.[项目点数] AS DECIMAL(18,8))                    AS [单项RVU点数],
             CAST(f.[执行系数] AS DECIMAL(18,8))                    AS [执行系数],
             f.[执行人员代码]                                      AS [执行人员代码],
             f.[执行人员]                                          AS [执行人员],
             CAST(f.[岗位系数] AS DECIMAL(18,8))                    AS [岗位系数],
             CAST(f.[学科系数] AS DECIMAL(18,8))                    AS [学科系数],
-            f.[日期类型编码]                                      AS [日期类型编码],
-            f.[日期类型名称]                                      AS [日期类型名称],
             CAST(f.[绩效核算系数] AS DECIMAL(18,8))                AS [绩效核算系数],
             CAST(f.[单价] AS DECIMAL(18,8))                        AS [单价],
-            CAST(f.[数量] AS DECIMAL(18,8))                        AS [汇总数量],
             CAST(f.[金额] AS DECIMAL(18,8))                        AS [汇总金额],
             CAST(f.[积分] AS DECIMAL(18,8))                        AS [门诊诊察类执行积分],
-            -- RVU 配置快照（FOR JSON PATH 纯常量投影，零表回表；按 PROJ_CODE 1:1 直连 cte_rvu）
+            -- RVU 配置全字段快照（FOR JSON PATH 纯常量投影，零表回表；按 PROJ_CODE 1:1 直连 cte_rvu）
             -- 注：与同级扁平节点互不干扰，位于根对象内联；父级 WITHOUT_ARRAY_WRAPPER 必须保留
             JSON_QUERY((
                 SELECT
+                    c.[VERSION_NO]       AS [版本号],
+                    c.[VERSION_DESC]     AS [版本描述],
+                    c.[ORG_CODE]         AS [机构编码],
+                    c.[ORG_NAME]         AS [机构名称],
+                    c.[SRC_SYS_CODE]     AS [源系统编码],
                     c.[PROJ_CODE]        AS [收费项目编码],
-                    c.[ITEM_CAT_CODE]    AS [绩效核算大类代码],
+                    c.[PROJ_NAME]        AS [收费项目名称],
+                    c.[MEAS_UNIT]        AS [原始计费单位],
+                    CAST(c.[RVU_VAL] AS DECIMAL(18,8))       AS [单项绩效点数],
+                    c.[ITEM_CAT_CODE]    AS [绩效核算大类编码],
                     c.[ITEM_CAT_NAME]    AS [绩效核算大类名称],
-                    CAST(c.[RVU_VAL]   AS DECIMAL(18,8)) AS [单项绩效点数],
-                    CAST(c.[EXEC_COFF] AS DECIMAL(18,8)) AS [执行系数]
+                    CAST(c.[UNIT_PRICE] AS DECIMAL(18,8))    AS [历史参考单价],
+                    c.[OPR_LEVEL_CODE]   AS [手术等级编码],
+                    c.[OPR_LEVEL_NAME]   AS [手术等级名称],
+                    c.[CREATE_USER]      AS [创建人],
+                    CONVERT(VARCHAR(19), c.[CREATE_TIME], 120) AS [创建时间],
+                    c.[UPDATE_USER]      AS [修改人],
+                    CONVERT(VARCHAR(19), c.[UPDATE_TIME], 120) AS [修改时间],
+                    CAST(c.[DECISION_COFF] AS DECIMAL(18,8)) AS [诊疗决策系数],
+                    CAST(c.[EXEC_COFF] AS DECIMAL(18,8))     AS [执行系数],
+                    c.[REMARK]           AS [备注说明],
+                    c.[SCORE_REASON]     AS [评分理由依据]
                 FROM cte_rvu AS c
                 WHERE c.[PROJ_CODE] = f.[项目代码]
                 FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
