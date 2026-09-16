@@ -12,7 +12,8 @@
   事实表 : dbo.[PF临时出院数据26A] ([出院科室代码] BIGINT / [出院时间] DATETIME)
   桥接表 : dbo.[sjjk_bmb_2025_06_01] ([id] bigint -> [编码] nvarchar(10))
   维表 A : dbo.[sjjk_DEPT_UNIT_MAPPING_2025_11_27] (拉链有效期 [START_DATE, END_DATE] 闭区间)
-  维表 B : dbo.[DIM_PRF_ITEM_RVU_VERSION] (按 PROJ_CODE 折叠单值，防一对多放大出院人次)
+  维表 B : dbo.[DIM_PRF_ITEM_RVU_VERSION] (物理 PK = [ORG_CODE, VERSION_NO, PROJ_CODE, MEAS_UNIT]，
+           PROJ_CODE 非唯一；经 ROW_NUMBER 按版本倒序收敛 VERSION_RANK = 1 锁定唯一快照，防一对多放大出院人次)
 
   ── 模板占位符 ──
   '{year}'      : 核算年份 (如 '2025')
@@ -22,6 +23,7 @@
   {struct_codes}: 核算单元过滤集 (如 ('10001', '10002'))
 
   修改日志:
+  2026-09-16 16:00:00 | 架构重构 | 剔除 cte_rvu 过度 MAX 聚合；强制倒数第二层 final 明细层日期时间字段文本化。
   2026-09-16 00:00:00 | 逻辑修正 | 追加出院时间核算范围过滤条件 WHERE f.[出院时间] >= '{start_time}' AND f.[出院时间] <= '{end_time}'，补齐原脚本缺失的核算期间约束（原实现无 WHERE 子句将全量累计出院人次）；同步补齐 Relative Path 标注并拆分核算期间截面与维度期间截面注释语义
   2026-09-16 12:00:00 | 架构持久化 | Envelope Pattern 双区块重构：第一区块前置幂等 DELETE（清场范围 = ITEM_CODE + UNIT_CODE，覆盖 UQ 前缀），计算链路原样封装为 cte_rvu → src → final，出院人次聚合关联与积分算式零改动；INSERT 落至一次分配专用物理表 DWD_FIN_CALC_ALLOC1_DETAIL_LOG（ITEM_CODE='ITEM_DISCHARGE_PERSON_COUNT_SCORE' / FINAL_VALUE_TYPE='SCORE' / ITEM_CAT_CODE='1101'），人员类型经 CASE 下沉至 PROJ_CODE 与 EXEC_ROLE 列，过程因子经 FOR JSON PATH 收敛入 CALC_DETAIL_JSON；第二区块以波浪号隔离，从物理表读取生成 CTE_DWD_READ_ALIAS 并严格承接 struct_code/struct_name/result_value 模板契约；
                                      纠偏 scalar subquery 无 FROM 的 T-SQL 强制语法约束，账期常量统一经 SELECT ... (SELECT ...) 常量投影落库。
@@ -42,36 +44,68 @@ WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
   AND [UNIT_CODE] IN {struct_codes}
 ;
 
--- 2. 算子计算与持久化落库（cte_rvu → src 出院人次聚合 → final 审计文本 → INSERT 封装）
+-- 2. 算子计算与持久化落库（cte_rvu → cte_rvu_snap 版本收敛 → src 出院人次聚合 → final 审计文本 → INSERT 封装）
 WITH
--- ── Import CTE: RVU 维表收敛（PROJ_CODE 非唯一键，按 PROJ_CODE 折叠为单值，防一对多放大出院人次） ──
+-- ── Import CTE: RVU 维表直连（版本寻址由 ROW_NUMBER 收敛 VERSION_RANK = 1，杜绝 MAX() 掩盖多版本数据问题） ──
 cte_rvu AS (
     SELECT
         v.[PROJ_CODE]                                 AS PROJ_CODE
-       ,MAX(v.[VERSION_NO])                           AS VERSION_NO
-       ,MAX(v.[VERSION_DESC])                         AS VERSION_DESC
-       ,MAX(v.[ORG_CODE])                             AS ORG_CODE
-       ,MAX(v.[ORG_NAME])                             AS ORG_NAME
-       ,MAX(v.[SRC_SYS_CODE])                         AS SRC_SYS_CODE
-       ,MAX(v.[PROJ_NAME])                            AS PROJ_NAME
-       ,MAX(v.[MEAS_UNIT])                            AS MEAS_UNIT
-       ,MAX(v.[ITEM_CAT_CODE])                        AS ITEM_CAT_CODE
-       ,MAX(v.[ITEM_CAT_NAME])                        AS ITEM_CAT_NAME
-       ,MAX(v.[OPR_LEVEL_CODE])                       AS OPR_LEVEL_CODE
-       ,MAX(v.[OPR_LEVEL_NAME])                       AS OPR_LEVEL_NAME
-       ,MAX(v.[CREATE_USER])                          AS CREATE_USER
-       ,MAX(v.[CREATE_TIME])                          AS CREATE_TIME
-       ,MAX(v.[UPDATE_USER])                          AS UPDATE_USER
-       ,MAX(v.[UPDATE_TIME])                          AS UPDATE_TIME
-       ,MAX(v.[REMARK])                               AS REMARK
-       ,MAX(v.[SCORE_REASON])                         AS SCORE_REASON
-       ,CAST(MAX(v.[RVU_VAL])       AS DECIMAL(18,8)) AS RVU_VAL
-       ,CAST(MAX(v.[EXEC_COFF])     AS DECIMAL(18,8)) AS EXEC_COFF
-       ,CAST(MAX(v.[DECISION_COFF]) AS DECIMAL(18,8)) AS DECISION_COFF
-       ,CAST(MAX(v.[UNIT_PRICE])    AS DECIMAL(18,8)) AS UNIT_PRICE
+       ,v.[VERSION_NO]                                AS VERSION_NO
+       ,v.[VERSION_DESC]                              AS VERSION_DESC
+       ,v.[ORG_CODE]                                  AS ORG_CODE
+       ,v.[ORG_NAME]                                  AS ORG_NAME
+       ,v.[SRC_SYS_CODE]                              AS SRC_SYS_CODE
+       ,v.[PROJ_NAME]                                 AS PROJ_NAME
+       ,v.[MEAS_UNIT]                                 AS MEAS_UNIT
+       ,v.[ITEM_CAT_CODE]                             AS ITEM_CAT_CODE
+       ,v.[ITEM_CAT_NAME]                             AS ITEM_CAT_NAME
+       ,v.[OPR_LEVEL_CODE]                            AS OPR_LEVEL_CODE
+       ,v.[OPR_LEVEL_NAME]                            AS OPR_LEVEL_NAME
+       ,v.[CREATE_USER]                               AS CREATE_USER
+       ,v.[CREATE_TIME]                               AS CREATE_TIME
+       ,v.[UPDATE_USER]                               AS UPDATE_USER
+       ,v.[UPDATE_TIME]                               AS UPDATE_TIME
+       ,v.[REMARK]                                    AS REMARK
+       ,v.[SCORE_REASON]                              AS SCORE_REASON
+       ,CAST(v.[RVU_VAL]       AS DECIMAL(18,8))      AS RVU_VAL
+       ,CAST(v.[EXEC_COFF]     AS DECIMAL(18,8))      AS EXEC_COFF
+       ,CAST(v.[DECISION_COFF] AS DECIMAL(18,8))      AS DECISION_COFF
+       ,CAST(v.[UNIT_PRICE]    AS DECIMAL(18,8))      AS UNIT_PRICE
+       ,ROW_NUMBER() OVER (
+            PARTITION BY v.[PROJ_CODE]
+            ORDER BY v.[VERSION_NO] DESC, v.[ORG_CODE] DESC, v.[MEAS_UNIT] DESC
+        )                                             AS VERSION_RANK
     FROM dbo.[DIM_PRF_ITEM_RVU_VERSION] AS v WITH (NOLOCK)
     WHERE v.[PROJ_CODE] IN ('METRIC_DISCHARGE_DOCTOR', 'METRIC_DISCHARGE_NURSE')
-    GROUP BY v.[PROJ_CODE]
+),
+-- ── 版本快照收敛：物理 PK 为 (ORG_CODE, VERSION_NO, PROJ_CODE, MEAS_UNIT)，PROJ_CODE 非唯一，
+--    必须按版本倒序锁定唯一快照（VERSION_RANK = 1）后再参与关联，严防一对多放大出院人次与积分 ──
+cte_rvu_snap AS (
+    SELECT
+        r.[PROJ_CODE]                                 AS PROJ_CODE
+       ,r.[VERSION_NO]                                AS VERSION_NO
+       ,r.[VERSION_DESC]                              AS VERSION_DESC
+       ,r.[ORG_CODE]                                  AS ORG_CODE
+       ,r.[ORG_NAME]                                  AS ORG_NAME
+       ,r.[SRC_SYS_CODE]                              AS SRC_SYS_CODE
+       ,r.[PROJ_NAME]                                 AS PROJ_NAME
+       ,r.[MEAS_UNIT]                                 AS MEAS_UNIT
+       ,r.[ITEM_CAT_CODE]                             AS ITEM_CAT_CODE
+       ,r.[ITEM_CAT_NAME]                             AS ITEM_CAT_NAME
+       ,r.[OPR_LEVEL_CODE]                            AS OPR_LEVEL_CODE
+       ,r.[OPR_LEVEL_NAME]                            AS OPR_LEVEL_NAME
+       ,r.[CREATE_USER]                               AS CREATE_USER
+       ,r.[CREATE_TIME]                               AS CREATE_TIME
+       ,r.[UPDATE_USER]                               AS UPDATE_USER
+       ,r.[UPDATE_TIME]                               AS UPDATE_TIME
+       ,r.[REMARK]                                    AS REMARK
+       ,r.[SCORE_REASON]                              AS SCORE_REASON
+       ,r.[RVU_VAL]                                   AS RVU_VAL
+       ,r.[EXEC_COFF]                                 AS EXEC_COFF
+       ,r.[DECISION_COFF]                             AS DECISION_COFF
+       ,r.[UNIT_PRICE]                                AS UNIT_PRICE
+    FROM cte_rvu AS r
+    WHERE r.[VERSION_RANK] = 1
 ),
 
 -- ── Logical CTE: 出院人次聚合（原主查询逻辑原样保留，仅补 PROJ_CODE 路由列与单元过滤） ──
@@ -99,7 +133,7 @@ src AS (
         ON b.[编码] = m.[HIS_DEPT_CODE]
        AND f.[出院时间] >= m.[START_DATE]
        AND (m.[END_DATE] IS NULL OR f.[出院时间] <= m.[END_DATE])
-    LEFT JOIN cte_rvu AS rvu
+    LEFT JOIN cte_rvu_snap AS rvu
         ON rvu.[PROJ_CODE] = CASE
                                 WHEN m.[PERFORM_PERSON_TYPE_CODE] = '1001' THEN 'METRIC_DISCHARGE_DOCTOR'
                                 WHEN m.[PERFORM_PERSON_TYPE_CODE] = '1002' THEN 'METRIC_DISCHARGE_NURSE'
@@ -119,10 +153,11 @@ src AS (
        ,rvu.[PROJ_CODE]
 ),
 -- ── Final CTE: 出口契约与审计文本打包（三段式：中文逻辑公式 | 纯数学代入算式） ──
+-- 【明细层日期时间强制文本化】本层即程序读写倒数第二层，年份/月份必须裸化为纯文本，严禁向持久化/JSON 层抛出 INT 原生长度
 final AS (
     SELECT
-        s.[出院时间年份]                              AS [出院时间年份]
-       ,s.[出院时间月份]                              AS [出院时间月份]
+        CAST(s.[出院时间年份] AS VARCHAR(4))           AS [出院时间年份]
+       ,CAST(s.[出院时间月份] AS VARCHAR(2))           AS [出院时间月份]
        ,s.[绩效核算单元编码]                          AS [绩效核算单元编码]
        ,s.[绩效核算单元名称]                          AS [绩效核算单元名称]
        ,s.[项目代码]                                  AS [项目代码]
@@ -174,8 +209,8 @@ SELECT
     f.[计算过程]                                 AS [CALC_PROCESS_TEXT],
     (
         SELECT
-            CAST(f.[出院时间年份] AS VARCHAR(11))                  AS [核算年份],
-            CAST(f.[出院时间月份] AS VARCHAR(11))                  AS [核算月份],
+            CAST(f.[出院时间年份] AS VARCHAR(4))                   AS [核算年份],
+            CAST(f.[出院时间月份] AS VARCHAR(2))                   AS [核算月份],
             f.[绩效核算单元编码]                                   AS [核算单元编码],
             f.[绩效核算单元名称]                                   AS [核算单元名称],
             f.[项目代码]                                          AS [项目代码],
@@ -193,7 +228,7 @@ SELECT
             CAST(f.[RVU] AS DECIMAL(18,8))                         AS [单项RVU点数],
             CAST(f.[积分] AS DECIMAL(18,8))                        AS [出院人次积分],
             f.[计算过程]                                          AS [计算过程描述],
-            -- RVU 配置快照（FOR JSON PATH 纯常量投影，零表回表；按 PROJ_CODE 1:1 直连 cte_rvu）
+            -- RVU 配置快照（FOR JSON PATH 纯常量投影，零表回表；按 PROJ_CODE 1:1 直连版本收敛后的 cte_rvu_snap）
             JSON_QUERY((
                 SELECT
                     c.[VERSION_NO]       AS [版本号],
@@ -218,7 +253,7 @@ SELECT
                     CAST(c.[EXEC_COFF] AS DECIMAL(18,8))     AS [执行系数],
                     c.[REMARK]           AS [备注说明],
                     c.[SCORE_REASON]     AS [评分理由依据]
-                FROM cte_rvu AS c
+                FROM cte_rvu_snap AS c
                 WHERE c.[PROJ_CODE] = f.[RVU项目代码]
                 FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
             ))                                          AS [RVU配置快照]
