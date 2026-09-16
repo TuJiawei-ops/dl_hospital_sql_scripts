@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ETL 日期双向自动转换工具</title>
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --bg-color: #f8fafc;
+            --border-color: #e2e8f0;
+            --tag-active: #2563eb;
+        }
+        body {
+            font-family: -apple-system, "SF Pro Display", sans-serif;
+            background-color: var(--bg-color);
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+        }
+        .container {
+            width: 100%;
+            max-width: 1000px;
+            background: white;
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        h2 { margin: 0 0 16px 0; color: #1e293b; font-size: 1.25rem; border-left: 4px solid var(--primary-color); padding-left: 10px; }
+        
+        .tag-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f1f5f9;
+            border-radius: 8px;
+        }
+        .date-tag {
+            padding: 8px 14px;
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            color: #475569;
+            transition: all 0.2s;
+        }
+        .date-tag.active {
+            background: var(--tag-active);
+            color: white;
+            border-color: var(--tag-active);
+            box-shadow: 0 2px 4px rgba(37, 99, 235, 0.3);
+        }
+
+        .main-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .box { position: relative; }
+        label { display: block; margin-bottom: 8px; font-weight: 600; color: #475569; font-size: 0.9rem; }
+        
+        textarea {
+            width: 100%;
+            height: 350px;
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            font-family: "Monaco", "Consolas", monospace;
+            font-size: 13px;
+            box-sizing: border-box;
+            resize: none;
+            outline: none;
+            background: #ffffff;
+        }
+        textarea:focus { border-color: var(--primary-color); background: #fff; }
+
+        .copy-btn {
+            margin-top: 8px;
+            width: 100%;
+            padding: 8px;
+            background: #10b981;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.8rem;
+        }
+        .copy-btn:hover { opacity: 0.9; }
+
+        .info-bar { 
+            grid-column: span 2;
+            font-size: 0.8rem; 
+            color: #64748b; 
+            margin-top: -10px;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>ETL 日期参数自动替换 (2026)</h2>
+    
+    <div id="tagGroup" class="tag-container"></div>
+
+    <div class="info-bar" id="currentMappingDisplay">加载中...</div>
+
+    <div class="main-layout">
+        <div class="box">
+            <label>占位符模版 (输入 {start_time}/{end_time} 或 '{year}'/'{month}')</label>
+            <textarea id="templateText" placeholder="在此输入包含 {start_time}/{end_time} 或 '{year}'/'{month}' 的模板内容..."></textarea>
+            <button class="copy-btn" onclick="copy('templateText')">复制模版</button>
+        </div>
+
+        <div class="box">
+            <label>实际日期内容 (输入具体日期自动还原)</label>
+            <textarea id="dateText" placeholder="在此输入包含具体日期的内容..."></textarea>
+            <button class="copy-btn" onclick="copy('dateText')">复制日期内容</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const TIME_CONFIGS = [
+        { label: "2026-01", year: "2026", month: "1", start: "2026-01-01 00:00:00", end: "2026-01-31 23:59:59" },
+        { label: "2026-02", year: "2026", month: "2", start: "2026-02-01 00:00:00", end: "2026-02-28 23:59:59" },
+        { label: "2026-03", year: "2026", month: "3", start: "2026-03-01 00:00:00", end: "2026-03-31 23:59:59" },
+        { label: "2026-04", year: "2026", month: "4", start: "2026-04-01 00:00:00", end: "2026-04-30 23:59:59" },
+        { label: "2026-05", year: "2026", month: "5", start: "2026-05-01 00:00:00", end: "2026-05-31 23:59:59" },
+        { label: "2026-06", year: "2026", month: "6", start: "2026-06-01 00:00:00", end: "2026-06-30 23:59:59" }
+    ];
+
+    let activeConfig = TIME_CONFIGS[0];
+    const templateEl = document.getElementById('templateText');
+    const dateEl = document.getElementById('dateText');
+
+    // 初始化标签
+    const tagGroup = document.getElementById('tagGroup');
+    TIME_CONFIGS.forEach((cfg, index) => {
+        const btn = document.createElement('div');
+        btn.className = 'date-tag' + (index === 0 ? ' active' : '');
+        btn.innerText = cfg.label;
+        btn.onclick = () => {
+            document.querySelectorAll('.date-tag').forEach(t => t.classList.remove('active'));
+            btn.classList.add('active');
+            activeConfig = cfg;
+            updateDisplayInfo();
+            // 切换标签后，以左侧为基准重新同步右侧
+            sync('template'); 
+        };
+        tagGroup.appendChild(btn);
+    });
+
+    function updateDisplayInfo() {
+        document.getElementById('currentMappingDisplay').innerHTML =
+            `当前参数：'{year}' = <b>'${activeConfig.year}'</b> | '{month}' = <b>'${activeConfig.month}'</b> | {start_time} = <b>${activeConfig.start}</b> | {end_time} = <b>${activeConfig.end}</b>`;
+    }
+
+    // 核心转换函数：四对占位符双向链式替换
+    // 【关键顺序约束】长串优先：'{year}'/'{month}' 与 '2026-01-01 00:00:00' 存在子串包含关系，
+    // 正向必须先换日期区间再换年/月；反向同样先还原日期区间，再还原年/月，否则 '2026' 会污染时间串。
+    function sync(source) {
+        if (source === 'template') {
+            // 模板 -> 实际内容
+            let val = templateEl.value;
+            val = val.split("{start_time}").join(activeConfig.start);
+            val = val.split("{end_time}").join(activeConfig.end);
+            // 年/月：带引号形态替换后保留引号（对齐 SQL 注入形态 '2026'），另兼容裸花括号 {year}
+            val = val.split("'{year}'").join("'" + activeConfig.year + "'");
+            val = val.split("'{month}'").join("'" + activeConfig.month + "'");
+            val = val.split("{year}").join(activeConfig.year);
+            val = val.split("{month}").join(activeConfig.month);
+            dateEl.value = val;
+        } else {
+            // 实际内容 -> 模板（先长串后短串，防子串误命中）
+            let val = dateEl.value;
+            val = val.split(activeConfig.start).join("{start_time}");
+            val = val.split(activeConfig.end).join("{end_time}");
+            val = val.split("'" + activeConfig.year + "'").join("'{year}'");
+            val = val.split("'" + activeConfig.month + "'").join("'{month}'");
+            templateEl.value = val;
+        }
+    }
+
+    // 事件监听
+    templateEl.addEventListener('input', () => sync('template'));
+    dateEl.addEventListener('input', () => sync('date'));
+
+    function copy(id) {
+        const el = document.getElementById(id);
+        el.select();
+        document.execCommand('copy');
+    }
+
+    // 初始执行
+    updateDisplayInfo();
+</script>
+
+</body>
+</html>
