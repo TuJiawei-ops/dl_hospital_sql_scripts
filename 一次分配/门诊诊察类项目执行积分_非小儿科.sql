@@ -4,6 +4,7 @@
   业务说明: 门诊诊察类项目（1043）按日汇总执行数据，执行科室代码 <> 36 硬隔离（NULL 安全）。
   学科系数: 常量 1.0
   修改日志：
+  2026-09-16 17:05:00 | 粒度压缩 | 剥离 [执行日期] 与 [缴费日期] 维度，按 人员+项目+月份+日期类型 进行聚合，实现数据高倍率压缩并提升计算性能。
   2026-09-16 16:20:00 | 维度扩充 | 接入 DIM_WORK_CALENDAR 表，以缴费日期关联提取 DAY_TYPE_CODE, DAY_TYPE_NAME, PERF_COEFF 投影与分组。
   2026-09-16 15:40:00 | 维度剪枝 | 核算归属改以「执行人员所在核算单元」为准，剥离 cte_bmb/cte_dept_map 及主查询对应 JOIN，删除 [执行绩效核算单元编码]/[执行绩效核算单元名称] 投影与分组；保留 f.[执行科室代码] <> 36（NULL 安全）硬隔离。
   2026-09-16 15:10:00 | 主数据路由纠偏 | 人员链路接入 MAP_MDM_STAFF（cte_ryb[编号] → cte_mdm_staff[SRC_STAFF_CODE] → [STAFF_CODE]），剥离不存在的 IS_ACTIVE 谓词（运行库无该列）。
@@ -80,9 +81,6 @@ SELECT
    ,ISNULL(sp_exec.[unit_code], N'未匹配')                     AS [执行人员所在核算单元编码]
    ,ISNULL(sp_exec.[unit_name], N'未匹配')                     AS [执行人员所在核算单元名称]
    ,ISNULL(CAST(sp_exec.[post_coefficient] AS DECIMAL(18,8)), CAST(1.00000000 AS DECIMAL(18,8))) AS [岗位系数]
-   ,CAST(f.[执行时间] AS DATE)                                 AS [执行日期]
-
-   ,CAST(f.[缴费时间] AS DATE)                                 AS [缴费日期]
 
    -- ── 工作日历维度（按缴费日期关联，LEFT JOIN + ISNULL 双保险防覆盖缺口） ──
    ,ISNULL(cal.[DAY_TYPE_CODE], 'WORKDAY')                    AS [日期类型编码]
@@ -121,8 +119,6 @@ GROUP BY
    ,ISNULL(sp_exec.[unit_code], N'未匹配')
    ,ISNULL(sp_exec.[unit_name], N'未匹配')
    ,ISNULL(CAST(sp_exec.[post_coefficient] AS DECIMAL(18,8)), CAST(1.00000000 AS DECIMAL(18,8)))
-   ,CAST(f.[执行时间] AS DATE)
-   ,CAST(f.[缴费时间] AS DATE)
    ,cal.[DAY_TYPE_CODE]
    ,cal.[DAY_TYPE_NAME]
    ,cal.[PERF_COEFF]
