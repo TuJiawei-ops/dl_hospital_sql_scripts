@@ -3,12 +3,14 @@
 -- 分层：DWD（明细层）
 -- 业务定义：绩效一次分配（核算单元 × 项目/指标粒度）核算明细持久化日志表
 -- 架构：EAV-Hybrid（公共维度列化 + 全量 JSON 过程仓）
--- 唯一键：CALC_YEAR + CALC_MONTH + ITEM_CODE + UNIT_CODE + PROJ_CODE
+-- 唯一键：CALC_YEAR + CALC_MONTH + ITEM_CODE + UNIT_CODE + PROJ_CODE + EXEC_ROLE + STAFF_CODE + DAY_TYPE_CODE
 -- 解耦说明：与二次分配表 DWD_FIN_CALC_DETAIL_LOG 物理解耦。
---           本表剥离 STAFF_CODE / STAFF_NAME / STAFF_TYPE / POST_CODE / POST_NAME，
---           显式承载一次分配命脉列 PROJ_CODE / PROJ_NAME / ITEM_CAT_CODE / ITEM_CAT_NAME；
+--           本表剥离 STAFF_TYPE / POST_CODE / POST_NAME，
+--           显式承载一次分配命脉列 PROJ_CODE / PROJ_NAME / ITEM_CAT_CODE / ITEM_CAT_NAME
+--           及执行归因列 STAFF_CODE / STAFF_NAME（员工）与 DAY_TYPE_CODE / DAY_TYPE_NAME（日期类型）；
 --           原表 DWD_FIN_CALC_DETAIL_LOG 退守二次分配（核算单元 × 员工 × 岗位）粒度。
 -- 修改日志：
+-- 2026-09-16 | 维度扩展 | 追加 STAFF_CODE / STAFF_NAME 与 DAY_TYPE_CODE / DAY_TYPE_NAME 维度物理列，设置默认值 NONE 并将 UQ 扩展为 8 维唯一键。
 -- 2026-09-12 22:50:00 | 字段扩展 | 新增 [TOTAL_QTY] DECIMAL(18,8) NULL 物理列（汇总工作量/数量·工分制第一性核对列）：将"工作量/工分"一等公民化，
 --                                      使前端与 BI 无需解析 CALC_DETAIL_JSON 即可直接 SUM(TOTAL_QTY) 完成 工作量 × 点值 业务对账；
 --                                      同步追加对应字段级扩展属性注释，JSON 过程仓继续承载全量计算链路上下文（列化核对 + JSON 穿透双轨并存）。
@@ -42,6 +44,14 @@ CREATE TABLE [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
     -- ===== 执行角色维度 =====
     [EXEC_ROLE]             NVARCHAR(20)        NOT NULL
         CONSTRAINT [DF_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_EXEC_ROLE] DEFAULT (N'NONE'), -- 执行角色（医生/技师/护士，非角色切分项默认 'NONE'）
+    -- ===== 执行员工维度（一次分配执行归因 + 明细检索锚点） =====
+    [STAFF_CODE]            NVARCHAR(50)        NOT NULL
+        CONSTRAINT [DF_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_STAFF_CODE] DEFAULT (N'NONE'), -- 员工编码（非人员粒度核算项默认 'NONE'）
+    [STAFF_NAME]            NVARCHAR(100)       NULL,       -- 员工姓名
+    -- ===== 日期类型维度（工作日历投影） =====
+    [DAY_TYPE_CODE]         NVARCHAR(30)        NOT NULL
+        CONSTRAINT [DF_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_DAY_TYPE_CODE] DEFAULT (N'NONE'), -- 日期类型编码（工作日/节假日等，非日历粒度核算项默认 'NONE'）
+    [DAY_TYPE_NAME]         NVARCHAR(50)        NULL,       -- 日期类型名称
     -- ===== 最终值与审计 =====
     [FINAL_VALUE_TYPE]      NVARCHAR(20)        NOT NULL
         CONSTRAINT [DF_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_VALUE_TYPE] DEFAULT (N'SCORE'), -- 最终值口径：SCORE 积分 / AMOUNT 金额 / INDEX 指数
@@ -55,9 +65,9 @@ CREATE TABLE [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
         CONSTRAINT [DF_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_CREATE_TIME] DEFAULT (SYSDATETIME()),
     -- 主键
     CONSTRAINT [PK_DWD_FIN_CALC_ALLOC1_DETAIL_LOG] PRIMARY KEY CLUSTERED ([ID] ASC),
-    -- 一次分配业务唯一键（基于 核算单元 + 项目 锁死幂等重跑与防重锚点）
+    -- 一次分配业务唯一键（基于 核算单元 + 项目 + 执行角色 + 员工 + 日期类型 锁死幂等重跑与防重锚点）
     CONSTRAINT [UQ_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_BIZ]
-        UNIQUE NONCLUSTERED ([CALC_YEAR] ASC, [CALC_MONTH] ASC, [ITEM_CODE] ASC, [UNIT_CODE] ASC, [PROJ_CODE] ASC, [EXEC_ROLE] ASC)
+        UNIQUE NONCLUSTERED ([CALC_YEAR] ASC, [CALC_MONTH] ASC, [ITEM_CODE] ASC, [UNIT_CODE] ASC, [PROJ_CODE] ASC, [EXEC_ROLE] ASC, [STAFF_CODE] ASC, [DAY_TYPE_CODE] ASC)
 );
 
 -- 账期 + 核算项检索索引
@@ -74,6 +84,11 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE [name] = N'IX_DWD_FIN_CALC_ALLOC1
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE [name] = N'IX_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_CAT' AND [object_id] = OBJECT_ID(N'[dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]'))
     CREATE NONCLUSTERED INDEX [IX_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_CAT]
         ON [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] ([ITEM_CAT_CODE] ASC);
+
+-- 员工 + 日期类型检索索引（按执行人员与日历类型下钻加速）
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE [name] = N'IX_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_STAFF' AND [object_id] = OBJECT_ID(N'[dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]'))
+    CREATE NONCLUSTERED INDEX [IX_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_STAFF]
+        ON [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] ([STAFF_CODE] ASC, [DAY_TYPE_CODE] ASC);
 
 -- =================================================================
 -- 扩展属性：表级与字段级注释
@@ -122,6 +137,18 @@ EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'绩效核算�
 
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'执行角色（医生/技师/护士，非角色切分核算项默认 NONE）',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_ALLOC1_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'EXEC_ROLE';
+
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'执行员工编码（一次分配执行归因与人员明细检索锚点，非人员粒度核算项默认 NONE）',
+    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_ALLOC1_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'STAFF_CODE';
+
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'执行员工姓名',
+    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_ALLOC1_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'STAFF_NAME';
+
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'日期类型编码（工作日历投影，如 WORKDAY/HOLIDAY，非日历粒度核算项默认 NONE）',
+    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_ALLOC1_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'DAY_TYPE_CODE';
+
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'日期类型名称（如 正常工作日/节假日）',
+    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_ALLOC1_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'DAY_TYPE_NAME';
 
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'最终值口径：SCORE 积分 / AMOUNT 金额 / INDEX 指数（防口径歧义）',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_ALLOC1_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'FINAL_VALUE_TYPE';
