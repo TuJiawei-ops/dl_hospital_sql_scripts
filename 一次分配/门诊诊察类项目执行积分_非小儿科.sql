@@ -4,6 +4,7 @@
   业务说明: 门诊诊察类项目（1043）按日汇总执行数据，执行科室代码 <> 36 硬隔离（NULL 安全）。
   学科系数: 常量 1.0
   修改日志：
+  2026-09-16 15:40:00 | 维度剪枝 | 核算归属改以「执行人员所在核算单元」为准，剥离 cte_bmb/cte_dept_map 及主查询对应 JOIN，删除 [执行绩效核算单元编码]/[执行绩效核算单元名称] 投影与分组；保留 f.[执行科室代码] <> 36（NULL 安全）硬隔离。
   2026-09-16 15:10:00 | 主数据路由纠偏 | 人员链路接入 MAP_MDM_STAFF（cte_ryb[编号] → cte_mdm_staff[SRC_STAFF_CODE] → [STAFF_CODE]），剥离不存在的 IS_ACTIVE 谓词（运行库无该列）。
 =============================================================================== */
 
@@ -19,24 +20,6 @@ WITH cte_rvu AS (
     WHERE v0.[PROJ_CODE] IS NOT NULL
       AND v0.[ITEM_CAT_CODE] = '1043'
     GROUP BY v0.[PROJ_CODE]
-)
-,cte_bmb AS (
-    SELECT
-        b.[id]                                      AS id
-       ,MAX(b.[编码])                               AS dept_code
-    FROM dbo.[sjjk_bmb_2025_06_01] AS b WITH (NOLOCK)
-    WHERE b.[id] IS NOT NULL
-    GROUP BY b.[id]
-)
-,cte_dept_map AS (
-    SELECT
-        m.[HIS_DEPT_CODE]                           AS HIS_DEPT_CODE
-       ,MAX(m.[HPS_DEPT_CODE])                      AS HPS_DEPT_CODE
-       ,MAX(m.[HPS_DEPT_NAME])                      AS HPS_DEPT_NAME
-    FROM dbo.[sjjk_DEPT_UNIT_MAPPING_2025_11_27] AS m WITH (NOLOCK)
-    WHERE m.[PERFORM_PERSON_TYPE_CODE] = '1001'
-      AND m.[HIS_DEPT_CODE] IS NOT NULL
-    GROUP BY m.[HIS_DEPT_CODE]
 )
 ,cte_ryb AS (
     SELECT
@@ -90,8 +73,6 @@ SELECT
 
    ,CAST(1.0 AS DECIMAL(18,8))                                AS [学科系数]
 
-   ,ISNULL(map_exec.[HPS_DEPT_CODE], N'未匹配')                AS [执行绩效核算单元编码]
-   ,ISNULL(map_exec.[HPS_DEPT_NAME], N'未匹配')                AS [执行绩效核算单元名称]
    ,f.[执行人员代码]                                          AS [执行人员代码]
    ,f.[执行人员]                                              AS [执行人员]
 
@@ -106,10 +87,6 @@ SELECT
 FROM dbo.[PF临时医疗服务项目26A] AS f WITH (NOLOCK)
 INNER JOIN cte_rvu AS v
     ON f.[项目代码] = v.[PROJ_CODE]
-LEFT JOIN cte_bmb AS bmb_exec
-    ON f.[执行科室代码] = bmb_exec.[id]
-LEFT JOIN cte_dept_map AS map_exec
-    ON bmb_exec.[dept_code] = map_exec.[HIS_DEPT_CODE]
 LEFT JOIN cte_ryb AS ryb_exec
     ON f.[执行人员代码] = ryb_exec.[id]
 LEFT JOIN cte_mdm_staff AS mdm_exec
@@ -130,8 +107,6 @@ GROUP BY
    ,v.[RVU_VAL]
    ,v.[EXEC_COFF]
    ,CAST(f.[单价] AS DECIMAL(18,8))
-   ,ISNULL(map_exec.[HPS_DEPT_CODE], N'未匹配')
-   ,ISNULL(map_exec.[HPS_DEPT_NAME], N'未匹配')
    ,f.[执行人员代码]
    ,f.[执行人员]
    ,ISNULL(sp_exec.[unit_code], N'未匹配')
