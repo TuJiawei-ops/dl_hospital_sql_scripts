@@ -4,6 +4,7 @@
   业务说明: 门诊诊察类项目（1043）按日汇总执行数据，执行科室代码 36 硬隔离。
   学科系数: 常量 1.1
   修改日志：
+  2026-09-16 | 业务指标扩充 | 新增 [积分] 与 [积分计算过程] 字段，动态展开 项目点数*数量*学科系数*绩效核算系数 审计计算表达式。
   2026-09-16 | 易用性增强 | 追加 ORDER BY 按 缴费年月->日期类型->核算单元->人员代码->项目代码 显式排序，提升财务对账与报表展示体验。
   2026-09-16 17:05:00 | 粒度压缩 | 剥离 [执行日期] 与 [缴费日期] 维度，按 人员+项目+月份+日期类型 进行聚合，实现数据高倍率压缩并提升计算性能。
   2026-09-16 16:20:00 | 维度扩充 | 接入 DIM_WORK_CALENDAR 表，以缴费日期关联提取 DAY_TYPE_CODE, DAY_TYPE_NAME, PERF_COEFF 投影与分组。
@@ -90,6 +91,17 @@ SELECT
 
    ,YEAR(f.[缴费时间])                                        AS [缴费日期年份]
    ,MONTH(f.[缴费时间])                                       AS [缴费日期月份]
+
+   -- ── 积分指标（积分 = 项目点数 × 数量 × 学科系数 × 绩效核算系数），
+   --    数值列与审计文本列同一乘数序列，全链 DECIMAL(18,8) 同精度同源 ──
+   ,CAST(v.[RVU_VAL] * SUM(CAST(f.[数量] AS DECIMAL(18,8))) * CAST(1.1 AS DECIMAL(18,8)) * ISNULL(CAST(cal.[PERF_COEFF] AS DECIMAL(18,8)), CAST(1.00000000 AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS [积分]
+   ,CONCAT(
+        CAST(CAST(v.[RVU_VAL] AS DECIMAL(18,8)) AS VARCHAR(32))
+       ,' × '
+       ,CAST(CAST(SUM(CAST(f.[数量] AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS VARCHAR(32))
+       ,' × 1.10000000 × '
+       ,CAST(ISNULL(CAST(cal.[PERF_COEFF] AS DECIMAL(18,8)), CAST(1.00000000 AS DECIMAL(18,8))) AS VARCHAR(32))
+    )                                                         AS [积分计算过程]
 FROM dbo.[PF临时医疗服务项目26A] AS f WITH (NOLOCK)
 INNER JOIN cte_rvu AS v
     ON f.[项目代码] = v.[PROJ_CODE]
