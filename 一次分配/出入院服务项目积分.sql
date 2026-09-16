@@ -1,11 +1,16 @@
 /*
   脚本名称: 出入院服务项目积分.sql
+  Relative Path : 一次分配/出入院服务项目积分.sql
   业务说明: 统计出院人次，并按人员类型路由 RVU 点数计算积分（纯 SELECT 查询）
 
   积分口径: 积分 = 出院人次 × RVU
   RVU 路由: 人员类型 '1001' → METRIC_DISCHARGE_DOCTOR
             人员类型 '1002' → METRIC_DISCHARGE_NURSE
-  时间截面: 出院时间落于 [START_DATE, END_DATE]（闭区间，与计算主脚本口径一致）
+  核算期间截面: f.[出院时间] 落于 ['{start_time}', '{end_time}'] 闭区间（外部注入核算起止时间占位符）
+  维度期间截面: 出院时间落于核算单元映射表 [START_DATE, END_DATE] 有效期（闭区间，与计算主脚本口径一致）
+
+  修改日志:
+  2026-09-16 00:00:00 | 逻辑修正 | 追加出院时间核算范围过滤条件 WHERE f.[出院时间] >= '{start_time}' AND f.[出院时间] <= '{end_time}'，补齐原脚本缺失的核算期间约束（原实现无 WHERE 子句将全量累计出院人次）；同步补齐 Relative Path 标注并拆分核算期间截面与维度期间截面注释语义
 */
 
 WITH cte_rvu AS (
@@ -45,6 +50,8 @@ LEFT JOIN cte_rvu AS rvu
                             WHEN m.[PERFORM_PERSON_TYPE_CODE] = '1002' THEN 'METRIC_DISCHARGE_NURSE'
                             ELSE NULL
                          END
+WHERE f.[出院时间] >= '{start_time}'
+  AND f.[出院时间] <= '{end_time}'
 GROUP BY
     YEAR(f.[出院时间])
    ,MONTH(f.[出院时间])
