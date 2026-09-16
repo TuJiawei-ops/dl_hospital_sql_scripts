@@ -176,6 +176,9 @@
             val = val.split("'{month}'").join("'" + activeConfig.month + "'");
             val = val.split("{year}").join(activeConfig.year);
             val = val.split("{month}").join(activeConfig.month);
+            // 【单向块隔离注释化】仅当 { } ~ 单独占用一行（忽略前后空白）时，行首追加 SQL 注释符 '-- '。
+            // 必须放在全部占位符替换之后：若置于之前，{start_time} 等成对花括号会被误判为孤立行。
+            val = val.replace(/^(\s*)([\{\}~])(\s*)$/gm, '$1-- $2$3');
             dateEl.value = val;
         } else {
             // 实际内容 -> 模板（先长串后短串，防子串误命中）
