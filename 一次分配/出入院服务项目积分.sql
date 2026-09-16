@@ -23,6 +23,7 @@
   {struct_codes}: 核算单元过滤集 (如 ('10001', '10002'))
 
   修改日志:
+  2026-09-16 18:00:00 | 格式规范对齐 | 依 .clinerules 第 6 节【占位符条件独占行与 AND 开头法则】审计三处 {struct_codes} 过滤点（DELETE 块 / src CTE / CTE_DWD_READ_ALIAS 块），确认均已独占一行且行首带 AND 前缀，SQL 逻辑零改动；三处上方补录格式规范注释锚点，防范后续同行混写回归破坏 `--` 单行注释隔离能力。
   2026-09-16 17:00:00 | 去版本化重构 | 本系统默认单版本快照，彻底移除 cte_rvu 中的 ROW_NUMBER 寻址与 cte_rvu_snap 过滤层，VERSION_NO 降维为普通备注列直接关联。
   2026-09-16 16:00:00 | 架构重构 | 剔除 cte_rvu 过度 MAX 聚合；强制倒数第二层 final 明细层日期时间字段文本化。
   2026-09-16 00:00:00 | 逻辑修正 | 追加出院时间核算范围过滤条件 WHERE f.[出院时间] >= '{start_time}' AND f.[出院时间] <= '{end_time}'，补齐原脚本缺失的核算期间约束（原实现无 WHERE 子句将全量累计出院人次）；同步补齐 Relative Path 标注并拆分核算期间截面与维度期间截面注释语义
@@ -38,6 +39,7 @@
 -- =================================================================
 ~
 -- 1. 幂等清理历史数据（清场范围 = ITEM_CODE + UNIT_CODE，已完全覆盖 UQ 前 4 列，重跑零脏数据）
+-- 【格式规范】占位符条件 [UNIT_CODE] IN {struct_codes} 强制独占一行并以 AND 开头，支持单行 `--` 注释做零副作用隔离
 DELETE FROM [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]
 WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
   AND [CALC_MONTH] = CAST('{month}' AS INT)
@@ -107,6 +109,7 @@ src AS (
                                 WHEN m.[PERFORM_PERSON_TYPE_CODE] = '1002' THEN 'METRIC_DISCHARGE_NURSE'
                                 ELSE NULL
                              END
+    -- 【格式规范】核算期间截面与动态单元过滤逐条独立换行，占位符条件独占一行并以 AND 开头
     WHERE f.[出院时间] >= '{start_time}'
       AND f.[出院时间] <= '{end_time}'
       AND ISNULL(m.[HPS_DEPT_CODE], 'UNKNOWN') IN {struct_codes}
@@ -260,6 +263,7 @@ WITH CTE_DWD_READ_ALIAS AS (
         [CALC_DETAIL_JSON]      AS [明细JSON],
         [CREATE_TIME]           AS [创建时间]
     FROM [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]
+    -- 【格式规范】占位符条件 [UNIT_CODE] IN {struct_codes} 独占一行并以 AND 开头，便于按单元降维调试
     WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
       AND [CALC_MONTH] = CAST('{month}' AS INT)
       AND [ITEM_CODE]  = N'ITEM_DISCHARGE_PERSON_COUNT_SCORE'
