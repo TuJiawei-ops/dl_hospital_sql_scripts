@@ -1,6 +1,6 @@
 /* ===============================================================================
-  Relative Path : 一次分配/出入院服务项目积分.sql
-  脚本名称: 出入院服务项目积分.sql
+  Relative Path : 一次分配/出院人次积分.sql
+  脚本名称: 出院人次积分.sql
   业务说明: 出院人次积分持久化（核算单元 × 人员类型 粒度），积分 = 出院人次 × RVU 点数。
   数据流向: dbo.[PF临时出院数据26A] (事实层)
             ──▶ dbo.[sjjk_bmb_2025_06_01] (字典桥接 出院科室代码 id -> 编码)
@@ -23,6 +23,7 @@
   {struct_codes}: 核算单元过滤集 (如 ('10001', '10002'))
 
   修改日志:
+  2026-09-16 21:30:00 | 文件重命名 | 脚本由「出入院服务项目积分.sql」正式更名为「出院人次积分.sql」并同步全链元数据：头部 Relative Path 与脚本名称标注对齐新文件名；落库投影 [SCRIPT_NAME] 常量由 N'出入院服务项目积分.sql' 改为 N'出院人次积分.sql'，保证持久化日志与物理脚本文件精准一致；同步修正跨血缘引用文件 analyses/排查_出院服务未映射核算单元科室明细.sql 的口径溯源标注；核算逻辑、ITEM_CODE、占位符契约与双区块结构零改动。
   2026-09-16 18:00:00 | 格式规范对齐 | 依 .clinerules 第 6 节【占位符条件独占行与 AND 开头法则】审计三处 {struct_codes} 过滤点（DELETE 块 / src CTE / CTE_DWD_READ_ALIAS 块），确认均已独占一行且行首带 AND 前缀，SQL 逻辑零改动；三处上方补录格式规范注释锚点，防范后续同行混写回归破坏 `--` 单行注释隔离能力。
   2026-09-16 17:00:00 | 去版本化重构 | 本系统默认单版本快照，彻底移除 cte_rvu 中的 ROW_NUMBER 寻址与 cte_rvu_snap 过滤层，VERSION_NO 降维为普通备注列直接关联。
   2026-09-16 16:00:00 | 架构重构 | 剔除 cte_rvu 过度 MAX 聚合；强制倒数第二层 final 明细层日期时间字段文本化。
@@ -158,7 +159,7 @@ SELECT
     CAST('{month}' AS INT)                      AS [CALC_MONTH],
     N'ITEM_DISCHARGE_PERSON_COUNT_SCORE'        AS [ITEM_CODE],
     N'出院人次积分'                              AS [ITEM_NAME],
-    N'出入院服务项目积分.sql'                    AS [SCRIPT_NAME],
+    N'出院人次积分.sql'                         AS [SCRIPT_NAME],
     f.[绩效核算单元编码]                         AS [UNIT_CODE],
     f.[绩效核算单元名称]                         AS [UNIT_NAME],
     f.[项目代码]                                 AS [PROJ_CODE],
