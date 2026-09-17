@@ -1,11 +1,20 @@
-﻿-- 第一区块：数据生成与持久化（数据生成时忽略 / 查询明细时跳过）
+﻿/* ===============================================================================
+  Relative Path : 一次分配/门诊诊察类项目执行积分_非小儿科.sql
+  脚本名称: 门诊诊察类项目执行积分_非小儿科.sql
+  业务说明: 门诊诊察类项目（1043）执行积分持久化（核算单元 × 执行人员 × 项目 × 日期类型 粒度），
+            执行科室代码 <> 36 硬隔离（NULL 安全）；学科系数常量 1.0。
+  积分口径: 积分 = 项目点数 × 汇总数量 × 学科系数(1.0) × 绩效核算系数
+  模板占位符: '{start_time}' / '{end_time}' / {struct_codes}
+*/
+
+-- 第一区块：数据生成与持久化（数据生成时忽略 / 查询明细时跳过）
 ~
 
 DELETE FROM [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]
 WHERE [CALC_YEAR]  = YEAR(CAST('{start_time}' AS DATETIME))
   AND [CALC_MONTH] = MONTH(CAST('{start_time}' AS DATETIME))
   AND [ITEM_CODE]  = N'ITEM_OUTPATIENT_DIAG_SCORE_NON_PED'
-  AND [UNIT_CODE] IN {struct_codes}
+--   AND [UNIT_CODE] IN {struct_codes}
 ;
 
 WITH
