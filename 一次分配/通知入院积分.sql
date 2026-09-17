@@ -17,7 +17,12 @@
            [SRC_STAFF_CODE] varchar(50) / [STAFF_CODE] char(6) —— 绩效内核标准人员编码
   系数表 : dbo.[ads_dept_post_coefficient_m]
            主键 (year, month, unit_code, staff_code, post_code)；
-           [unit_code] varchar(50) / [unit_name] varchar(100)
+            [unit_code] varchar(50) / [unit_name] varchar(100)
+   RVU维表: dbo.[DIM_PRF_ITEM_RVU_VERSION]
+            主键 (ORG_CODE, VERSION_NO, PROJ_CODE, MEAS_UNIT)；
+            [PROJ_CODE] varchar(50) / [RVU_VAL] numeric(12,4) NOT NULL DEFAULT 0.0000
+            单版本快照策略：PROJ_CODE 1:1 直连绩效内核指标编码，VERSION_NO / VERSION_DESC
+            降维为普通备注属性列，严禁作为动态寻址条件（恪守零版本寻址法则）。
 
   ── 关键纠偏（防熵增） ──
   1. 【零聚合收敛】本脚本为明细查询，严禁任何 MAX()/MIN() 折叠与 ROW_NUMBER() 开窗收敛；
@@ -34,8 +39,10 @@
                 × 开单人所属核算单元（月度汇总级，度量为 COUNT(1) 人次数）
   输出契约      : 入院登记年份 / 入院登记月份 / 项目名称 / 项目编码 / 开单人员代码 / 开单人
                 / 开单人所属核算单元编码 / 开单人所属核算单元名称 / 人次数
+                / RVU / 积分 / 积分详解
 
   修改日志
+  2026-09-17 09:55:00 | 指标扩展 | 通过项目编码关联 DIM_PRF_ITEM_RVU_VERSION 维表提取 RVU，计算积分(人次数*RVU)，并依据四段式规范拼接积分详解审计文本。
   2026-09-17 09:45:00 | 映射扩展 | 增设项目编码衍生字段：当项目名称等于'通知入院'时映射为'METRIC_ADM_NOTICE'，保持现有分组粒度不变。
   2026-09-17 09:35:00 | 维度裁剪 | 剔除执行科室代码、执行科室、执行人员代码与执行人员字段，粒度收敛至 [入院登记年月 × 项目名称 × 开单人 × 开单人所属核算单元]，进一步减少结果集行数。
   2026-09-17 09:25:00 | 维度裁剪 | 剔除冗余开单科室代码与开单科室字段，基于开单人所属核算单元归并分组，进一步降低数据粒度并减少行数。
@@ -58,6 +65,16 @@ SELECT
    ,D.[unit_code]                                   AS [开单人所属核算单元编码]
    ,D.[unit_name]                                   AS [开单人所属核算单元名称]
    ,COUNT(1)                                        AS [人次数]
+   -- 【精度标准】RVU 源列为 numeric(12,4)，空值兜底后统一收敛至全局 DECIMAL(18,8) 强制精度
+   ,CAST(ISNULL(R.[RVU_VAL], 0) AS DECIMAL(18,8))   AS [RVU]
+   ,CAST(COUNT(1) * ISNULL(R.[RVU_VAL], 0) AS DECIMAL(18,8)) AS [积分]
+   -- 【四段式审计文本】元数据段 | 中文逻辑公式段 | 纯数学代入算式段 | 纯数字结算算式段（后两段零汉字）
+   ,'通知入院积分 | 通知入院积分 = 人次数 × RVU | '
+    + CAST(COUNT(1) AS VARCHAR(11)) + ' × '
+    + CAST(CAST(ISNULL(R.[RVU_VAL], 0) AS DECIMAL(18,8)) AS VARCHAR(20)) + ' = '
+    + CAST(CAST(COUNT(1) * ISNULL(R.[RVU_VAL], 0) AS DECIMAL(18,8)) AS VARCHAR(20))
+    + ' | '
+    + CAST(CAST(COUNT(1) * ISNULL(R.[RVU_VAL], 0) AS DECIMAL(18,8)) AS VARCHAR(20)) AS [积分详解]
 FROM dbo.[PF临时收入院数据26A] AS A WITH (NOLOCK)
 LEFT JOIN dbo.[sjjk_ryb_2025_06_01] AS B WITH (NOLOCK)
     ON A.[开单人员代码] = B.[id]
@@ -67,6 +84,14 @@ LEFT JOIN dbo.[ads_dept_post_coefficient_m] AS D WITH (NOLOCK)
     ON C.[STAFF_CODE]  = D.[staff_code]
    AND D.[year]        = YEAR(A.[入院登记时间])
    AND D.[month]       = MONTH(A.[入院登记时间])
+-- 【零版本寻址】RVU 维表单版本快照，PROJ_CODE 1:1 直连，严禁 ROW_NUMBER() 动态版本路由；
+-- 关联键复用 SELECT 中的 [项目编码] 派生表达式（分组前逐行求值，与输出列同源同义）。
+-- ELSE NULL 分支语义安全：NULL 与任何值比较均为 UNKNOWN，不会误配其他项目。
+LEFT JOIN dbo.[DIM_PRF_ITEM_RVU_VERSION] AS R WITH (NOLOCK)
+    ON R.[PROJ_CODE] = CASE
+                           WHEN A.[项目名称] = '通知入院' THEN 'METRIC_ADM_NOTICE'
+                           ELSE NULL
+                       END
 -- 【格式规范】时间占位符条件强制独占一行并以 AND 开头，支撑单行 `--` 注释做零副作用隔离
 WHERE 1=1
   AND A.[入院登记时间] >= '{start_time}'
@@ -79,4 +104,5 @@ GROUP BY
    ,A.[开单人]
    ,D.[unit_code]
    ,D.[unit_name]
+   ,R.[RVU_VAL]
 ;
