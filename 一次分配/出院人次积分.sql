@@ -23,6 +23,7 @@
   {struct_codes}: 核算单元过滤集 (如 ('10001', '10002'))
 
   修改日志:
+  2026-09-17 10:30:00 | 映射修正 | 纠偏 PROJ_NAME 映射：在 src CTE 中增加 [项目名称] 映射（1001->出院人次-医生，1002->出院人次-护士），替换落库投影 f.[人员类型] 为 f.[项目名称]，实现 PROJ_CODE 与 PROJ_NAME 完全对齐。
   2026-09-16 21:30:00 | 文件重命名 | 脚本由「出入院服务项目积分.sql」正式更名为「出院人次积分.sql」并同步全链元数据：头部 Relative Path 与脚本名称标注对齐新文件名；落库投影 [SCRIPT_NAME] 常量由 N'出入院服务项目积分.sql' 改为 N'出院人次积分.sql'，保证持久化日志与物理脚本文件精准一致；同步修正跨血缘引用文件 analyses/排查_出院服务未映射核算单元科室明细.sql 的口径溯源标注；核算逻辑、ITEM_CODE、占位符契约与双区块结构零改动。
   2026-09-16 18:00:00 | 格式规范对齐 | 依 .clinerules 第 6 节【占位符条件独占行与 AND 开头法则】审计三处 {struct_codes} 过滤点（DELETE 块 / src CTE / CTE_DWD_READ_ALIAS 块），确认均已独占一行且行首带 AND 前缀，SQL 逻辑零改动；三处上方补录格式规范注释锚点，防范后续同行混写回归破坏 `--` 单行注释隔离能力。
   2026-09-16 17:00:00 | 去版本化重构 | 本系统默认单版本快照，彻底移除 cte_rvu 中的 ROW_NUMBER 寻址与 cte_rvu_snap 过滤层，VERSION_NO 降维为普通备注列直接关联。
@@ -93,6 +94,11 @@ src AS (
             WHEN m.[PERFORM_PERSON_TYPE_CODE] = '1002' THEN 'METRIC_DISCHARGE_NURSE'
             ELSE 'UNKNOWN'
         END                                          AS [项目代码]
+       ,CASE
+            WHEN m.[PERFORM_PERSON_TYPE_CODE] = '1001' THEN N'出院人次-医生'
+            WHEN m.[PERFORM_PERSON_TYPE_CODE] = '1002' THEN N'出院人次-护士'
+            ELSE N'UNKNOWN'
+        END                                          AS [项目名称]
        ,COUNT(1)                                     AS [出院人次]
        ,ISNULL(rvu.[RVU_VAL], CAST(0 AS DECIMAL(18,8))) AS [RVU]
        ,CAST(COUNT(1) * ISNULL(rvu.[RVU_VAL], CAST(0 AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS [积分]
@@ -121,6 +127,16 @@ src AS (
        ,m.[HPS_DEPT_NAME]
        ,m.[PERFORM_PERSON_TYPE_CODE]
        ,m.[PERFORM_PERSON_TYPE]
+       ,CASE
+            WHEN m.[PERFORM_PERSON_TYPE_CODE] = '1001' THEN 'METRIC_DISCHARGE_DOCTOR'
+            WHEN m.[PERFORM_PERSON_TYPE_CODE] = '1002' THEN 'METRIC_DISCHARGE_NURSE'
+            ELSE 'UNKNOWN'
+        END
+       ,CASE
+            WHEN m.[PERFORM_PERSON_TYPE_CODE] = '1001' THEN N'出院人次-医生'
+            WHEN m.[PERFORM_PERSON_TYPE_CODE] = '1002' THEN N'出院人次-护士'
+            ELSE N'UNKNOWN'
+        END
        ,rvu.[RVU_VAL]
        ,rvu.[PROJ_CODE]
 ),
@@ -133,6 +149,7 @@ final AS (
        ,s.[绩效核算单元编码]                          AS [绩效核算单元编码]
        ,s.[绩效核算单元名称]                          AS [绩效核算单元名称]
        ,s.[项目代码]                                  AS [项目代码]
+       ,s.[项目名称]                                  AS [项目名称]
        ,s.[人员类型编码]                              AS [人员类型编码]
        ,s.[人员类型]                                  AS [人员类型]
        ,s.[出院人次]                                  AS [出院人次]
@@ -163,7 +180,7 @@ SELECT
     f.[绩效核算单元编码]                         AS [UNIT_CODE],
     f.[绩效核算单元名称]                         AS [UNIT_NAME],
     f.[项目代码]                                 AS [PROJ_CODE],
-    f.[人员类型]                                 AS [PROJ_NAME],
+    f.[项目名称]                                 AS [PROJ_NAME],
     '1101'                                      AS [ITEM_CAT_CODE],
     N'出入院服务类'                              AS [ITEM_CAT_NAME],
     CASE
@@ -186,7 +203,7 @@ SELECT
             f.[绩效核算单元编码]                                   AS [核算单元编码],
             f.[绩效核算单元名称]                                   AS [核算单元名称],
             f.[项目代码]                                          AS [项目代码],
-            f.[人员类型]                                          AS [项目名称],
+            f.[项目名称]                                          AS [项目名称],
             '1101'                                               AS [绩效核算大类代码],
             N'出入院服务类'                                        AS [绩效核算大类名称],
             CASE
