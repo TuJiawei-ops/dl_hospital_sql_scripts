@@ -50,6 +50,7 @@
   {struct_codes}: 核算单元过滤集 (如 ('10001', '10002'))
 
   修改日志
+  2026-09-17 10:15:00 | 细节文本化 | 依 .clinerules 规范，将第二区块 CTE_DWD_READ_ALIAS 中的 [CREATE_TIME] 显式文本化为 CONVERT(VARCHAR(19), [CREATE_TIME], 120) AS [创建时间]。
   2026-09-17 10:00:00 | 架构持久化 | Envelope Pattern 双区块重构：前置幂等 DELETE，计算链路封装落库至 DWD_FIN_CALC_ALLOC1_DETAIL_LOG（ITEM_CODE='ITEM_ADM_NOTICE_SCORE'），明细收敛入 CALC_DETAIL_JSON；第二区块以波浪号隔离，严格承接 struct_code/struct_name/result_value 模板契约。
   2026-09-17 09:55:00 | 指标扩展 | 通过项目编码关联 DIM_PRF_ITEM_RVU_VERSION 维表提取 RVU，计算积分(人次数*RVU)，并依据四段式规范拼接积分详解审计文本。
   2026-09-17 09:45:00 | 映射扩展 | 增设项目编码衍生字段：当项目名称等于'通知入院'时映射为'METRIC_ADM_NOTICE'，保持现有分组粒度不变。
@@ -284,7 +285,8 @@ WITH CTE_DWD_READ_ALIAS AS (
         [TOTAL_QTY]             AS [汇总数量],
         [CALC_PROCESS_TEXT]     AS [计算过程描述],
         [CALC_DETAIL_JSON]      AS [明细JSON],
-        [CREATE_TIME]           AS [创建时间]
+        -- 【明细层日期时间强制文本化】第二区块为接口读取出口，[CREATE_TIME] 为 DATETIME2 原生类型，必须文本化防原生类型外泄
+        CONVERT(VARCHAR(19), [CREATE_TIME], 120) AS [创建时间]
     FROM [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]
     -- 【格式规范】占位符条件 [UNIT_CODE] IN {struct_codes} 独占一行并以 AND 开头，便于按单元降维调试
     WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
