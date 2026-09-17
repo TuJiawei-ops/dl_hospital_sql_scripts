@@ -1,0 +1,68 @@
+/* ===============================================================================
+  Relative Path : 一次分配/通知入院积分.sql
+  脚本名称: 通知入院积分.sql
+  业务定义: 通知入院积分明细提取与开单人所属核算单元属性挂载查询。
+  数据流向: dbo.[PF临时收入院数据26A] (事实层, 别名 A)
+            ──▶ dbo.[sjjk_ryb_2025_06_01] (人员表桥接 [开单人员代码] -> 原始系统工号, 别名 B)
+            ──▶ dbo.[MAP_MDM_STAFF] (主数据路由 原始系统工号 -> 绩效标准工号, 别名 C)
+            ──▶ dbo.[ads_dept_post_coefficient_m] (月度岗位系数表 -> 开单人所属核算单元, 别名 D)
+
+  ── 依赖契约 ──
+  事实层 : dbo.[PF临时收入院数据26A]
+           [开单人员代码] BIGINT / [入院登记时间] DATETIME / [开单时间] DATETIME
+  人员表 : dbo.[sjjk_ryb_2025_06_01]
+           [id] int (主键聚簇) / [编号] varchar(300) —— 事实层数值主键 → 原始系统工号的唯一桥接通道
+  映射表 : dbo.[MAP_MDM_STAFF]
+           主键 (SRC_ORG_CODE, SRC_SYS_CODE, SRC_STAFF_CODE)；
+           [SRC_STAFF_CODE] varchar(50) / [STAFF_CODE] char(6) —— 绩效内核标准人员编码
+  系数表 : dbo.[ads_dept_post_coefficient_m]
+           主键 (year, month, unit_code, staff_code, post_code)；
+           [unit_code] varchar(50) / [unit_name] varchar(100)
+
+  ── 关键纠偏（防熵增） ──
+  1. 【零聚合收敛】本脚本为明细查询，严禁任何 MAX()/MIN() 折叠与 ROW_NUMBER() 开窗收敛；
+     岗位系数表物理主键含 [post_code]，同一员工同一账期多岗位（兼岗/月中转科）必然产生多行，
+     核算单元维度差异属业务真实语义，按自然笛卡尔积原样透传，严禁用黑箱聚合掩盖。
+  2. 【账期取自事实层】系数表账期 [year]/[month] 直接由事实层 [入院登记时间] 派生，
+     严禁引入外部 '{year}' / '{month}' 作为第二套账期口径，避免双账期语义漂移。
+  3. 【编码族关联】全链关联键均为字符串编码族，原值裸引用，不做 CAST / 补零等冗余改造。
+
+  ── 模板占位符（严禁破坏） ──
+  '{start_time}': 核算开始时间 (如 '2024-01-01 00:00:00.000')
+  '{end_time}'  : 核算结束时间 (如 '2024-01-31 23:59:59.997')
+  输出契约      : 事实层全量原始列 13 项 + 开单人所属核算单元编码 + 开单人所属核算单元名称
+
+  修改日志
+  2026-09-17 09:05:00 | 脚本新建 | 新建通知入院积分查询脚本；多表关联提取开单人所属核算单元编码与名称，使用标准时间范围占位符过滤，严格恪守零 ROW_NUMBER / 零 MAX-MIN 聚合折叠与时间占位符独占行法则。
+=============================================================================== */
+
+SELECT
+    A.[项目名称]                                    AS [项目名称]
+   ,A.[开单科室代码]                                AS [开单科室代码]
+   ,A.[开单科室]                                    AS [开单科室]
+   ,A.[开单人员代码]                                AS [开单人员代码]
+   ,A.[开单人]                                      AS [开单人]
+   ,A.[开单时间]                                    AS [开单时间]
+   ,A.[执行科室代码]                                AS [执行科室代码]
+   ,A.[执行科室]                                    AS [执行科室]
+   ,A.[执行人员代码]                                AS [执行人员代码]
+   ,A.[执行人员]                                    AS [执行人员]
+   ,A.[入院登记时间]                                AS [入院登记时间]
+   ,A.[患者ID]                                      AS [患者ID]
+   ,A.[挂号ID]                                      AS [挂号ID]
+   ,D.[unit_code]                                   AS [开单人所属核算单元编码]
+   ,D.[unit_name]                                   AS [开单人所属核算单元名称]
+FROM dbo.[PF临时收入院数据26A] AS A WITH (NOLOCK)
+LEFT JOIN dbo.[sjjk_ryb_2025_06_01] AS B WITH (NOLOCK)
+    ON A.[开单人员代码] = B.[id]
+LEFT JOIN dbo.[MAP_MDM_STAFF] AS C WITH (NOLOCK)
+    ON B.[编号] = C.[SRC_STAFF_CODE]
+LEFT JOIN dbo.[ads_dept_post_coefficient_m] AS D WITH (NOLOCK)
+    ON C.[STAFF_CODE]  = D.[staff_code]
+   AND D.[year]        = YEAR(A.[入院登记时间])
+   AND D.[month]       = MONTH(A.[入院登记时间])
+-- 【格式规范】时间占位符条件强制独占一行并以 AND 开头，支撑单行 `--` 注释做零副作用隔离
+WHERE 1=1
+  AND A.[入院登记时间] >= '{start_time}'
+  AND A.[入院登记时间] <= '{end_time}'
+;
