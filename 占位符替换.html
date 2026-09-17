@@ -1,4 +1,15 @@
 <!DOCTYPE html>
+<!--
+  =================================================================
+  ETL 日期参数双向自动转换工具（占位符替换）
+  =================================================================
+  Relative Path : 占位符替换.html
+
+  修改日志：
+  2026-09-17 00:00:00 | 架构重构 | 废弃静态 TIME_CONFIGS 数组，新增 getConfigByYearMonth(year, month) 动态日期内核（new Date(y, m, 0).getDate() 精准计算当月最后一天，自动兼容 28/29/30/31 日与闰年）；新增 <input type="month"> 月份选择器 + 2025/2026 快捷年份切换 + 1~12 月动态快捷标签；布局升级（.container → 96vw、textarea → calc(100vh - 260px)/min-height 500px）；完整保留 sync() 长串优先双向替换与 '-- ' 注释正则规则。
+  2026-09-16 12:00:00 | 功能新增 | 首版：2026 年 1~6 月静态快捷标签 + 四对占位符（{start_time}/{end_time}/'{year}'/'{month}'）双向链式替换 + 行首孤立符号与 {struct_codes} 行自动注释。
+  =================================================================
+-->
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -19,21 +30,48 @@
             justify-content: center;
         }
         .container {
-            width: 100%;
-            max-width: 1000px;
+            width: 96%;
+            max-width: 96vw;
             background: white;
-            padding: 24px;
+            padding: 20px 24px;
             border-radius: 12px;
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
         }
-        h2 { margin: 0 0 16px 0; color: #1e293b; font-size: 1.25rem; border-left: 4px solid var(--primary-color); padding-left: 10px; }
-        
+        h2 { margin: 0 0 14px 0; color: #1e293b; font-size: 1.25rem; border-left: 4px solid var(--primary-color); padding-left: 10px; }
+
+        /* ── 通用月份控制区（月份选择器 + 年份切换） ── */
+        .control-bar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+            padding: 12px 15px;
+            background: #f8fafc;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+        }
+        .control-bar .control-label { font-weight: 600; color: #475569; font-size: 0.9rem; }
+        input[type="month"] {
+            padding: 7px 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 0.9rem;
+            color: #1e293b;
+            background: white;
+            outline: none;
+            font-family: inherit;
+        }
+        input[type="month"]:focus { border-color: var(--primary-color); }
+        .control-sep { flex: 1 1 auto; }
+        .year-group { display: flex; gap: 6px; }
+
         .tag-container {
             display: flex;
             flex-wrap: wrap;
             gap: 10px;
-            margin-bottom: 20px;
-            padding: 15px;
+            margin-bottom: 12px;
+            padding: 12px 15px;
             background: #f1f5f9;
             border-radius: 8px;
         }
@@ -65,7 +103,8 @@
         
         textarea {
             width: 100%;
-            height: 350px;
+            height: calc(100vh - 260px);
+            min-height: 500px;
             padding: 12px;
             border: 1px solid var(--border-color);
             border-radius: 8px;
@@ -93,11 +132,10 @@
         .copy-btn:hover { opacity: 0.9; }
 
         .info-bar { 
-            grid-column: span 2;
             font-size: 0.8rem; 
             color: #64748b; 
-            margin-top: -10px;
-            margin-bottom: 10px;
+            margin-top: -4px;
+            margin-bottom: 12px;
             text-align: center;
         }
     </style>
@@ -105,8 +143,18 @@
 <body>
 
 <div class="container">
-    <h2>ETL 日期参数自动替换 (2026)</h2>
-    
+    <h2>ETL 日期参数自动替换（任意年月动态计算）</h2>
+
+    <!-- ── 通用月份控制区：支持任意年份/月份，自动精准计算当月天数（含闰年） ── -->
+    <div class="control-bar">
+        <span class="control-label">核算月份</span>
+        <input type="month" id="monthPicker" value="2026-01">
+        <span class="control-sep"></span>
+        <span class="control-label">快捷年份</span>
+        <div class="year-group" id="yearGroup"></div>
+    </div>
+
+    <!-- ── 快捷标签栏：按选中年份动态渲染 1~12 月 ── -->
     <div id="tagGroup" class="tag-container"></div>
 
     <div class="info-bar" id="currentMappingDisplay">加载中...</div>
@@ -127,40 +175,52 @@
 </div>
 
 <script>
-    const TIME_CONFIGS = [
-        { label: "2026-01", year: "2026", month: "1", start: "2026-01-01 00:00:00", end: "2026-01-31 23:59:59" },
-        { label: "2026-02", year: "2026", month: "2", start: "2026-02-01 00:00:00", end: "2026-02-28 23:59:59" },
-        { label: "2026-03", year: "2026", month: "3", start: "2026-03-01 00:00:00", end: "2026-03-31 23:59:59" },
-        { label: "2026-04", year: "2026", month: "4", start: "2026-04-01 00:00:00", end: "2026-04-30 23:59:59" },
-        { label: "2026-05", year: "2026", month: "5", start: "2026-05-01 00:00:00", end: "2026-05-31 23:59:59" },
-        { label: "2026-06", year: "2026", month: "6", start: "2026-06-01 00:00:00", end: "2026-06-30 23:59:59" }
-    ];
+    /* ══════════════════════════════════════════════════════════════════
+     * 动态日期计算内核（零维护成本）
+     * 说明：彻底废除静态 TIME_CONFIGS 数组，改用 new Date(year, month, 0).getDate()
+     *       精准计算当月最后一天（自动兼容 28/29/30/31 日与闰年逻辑）。
+     * ══════════════════════════════════════════════════════════════════ */
 
-    let activeConfig = TIME_CONFIGS[0];
+    // 快捷年份候选（可自由扩展，仅用于生成快捷标签，不影响月份选择器）
+    const QUICK_YEARS = [2025, 2026];
+
+    // 两位补零
+    function pad2(n) {
+        return String(n).padStart(2, '0');
+    }
+
+    /**
+     * 依据年份与月份动态生成核算时间配置
+     * @param {number} year  如 2025 / 2026
+     * @param {number} month 1 ~ 12
+     * @returns {{year:string, month:string, start:string, end:string, label:string}}
+     */
+    function getConfigByYearMonth(year, month) {
+        const y = parseInt(year, 10);
+        const m = parseInt(month, 10);
+        // 关键：new Date(y, m, 0) 取"下月第 0 天"即当月最后一天，闰年 2 月自动得 29
+        const lastDay = new Date(y, m, 0).getDate();
+        const mm = pad2(m);
+        const start = `${y}-${mm}-01 00:00:00`;
+        const end = `${y}-${mm}-${pad2(lastDay)} 23:59:59`;
+        return {
+            label: `${y}-${mm}`,
+            year: String(y),
+            month: String(m),
+            start: start,
+            end: end
+        };
+    }
+
+    let activeConfig = null;
+    let activeYear = QUICK_YEARS[0];
+
     const templateEl = document.getElementById('templateText');
     const dateEl = document.getElementById('dateText');
-
-    // 初始化标签
+    const monthPicker = document.getElementById('monthPicker');
     const tagGroup = document.getElementById('tagGroup');
-    TIME_CONFIGS.forEach((cfg, index) => {
-        const btn = document.createElement('div');
-        btn.className = 'date-tag' + (index === 0 ? ' active' : '');
-        btn.innerText = cfg.label;
-        btn.onclick = () => {
-            document.querySelectorAll('.date-tag').forEach(t => t.classList.remove('active'));
-            btn.classList.add('active');
-            activeConfig = cfg;
-            updateDisplayInfo();
-            // 切换标签后，以左侧为基准重新同步右侧
-            sync('template'); 
-        };
-        tagGroup.appendChild(btn);
-    });
-
-    function updateDisplayInfo() {
-        document.getElementById('currentMappingDisplay').innerHTML =
-            `当前参数：'{year}' = <b>'${activeConfig.year}'</b> | '{month}' = <b>'${activeConfig.month}'</b> | {start_time} = <b>${activeConfig.start}</b> | {end_time} = <b>${activeConfig.end}</b>`;
-    }
+    const yearGroup = document.getElementById('yearGroup');
+    const infoEl = document.getElementById('currentMappingDisplay');
 
     // 核心转换函数：四对占位符双向链式替换
     // 【关键顺序约束】长串优先：'{year}'/'{month}' 与 '2026-01-01 00:00:00' 存在子串包含关系，
@@ -200,14 +260,102 @@
     templateEl.addEventListener('input', () => sync('template'));
     dateEl.addEventListener('input', () => sync('date'));
 
+    /* ══════════════════════════════════════════════════════════════════
+     * 控件渲染与交互（月份选择器 + 快捷年份 + 1~12 月快捷标签）
+     * ══════════════════════════════════════════════════════════════════ */
+
+    function updateDisplayInfo() {
+        infoEl.innerHTML =
+            `当前参数：'{year}' = <b>'${activeConfig.year}'</b> | '{month}' = <b>'${activeConfig.month}'</b> | {start_time} = <b>${activeConfig.start}</b> | {end_time} = <b>${activeConfig.end}</b>`;
+    }
+
+    // 同步高亮：以 activeConfig 的 年月 为准
+    function highlightActive() {
+        document.querySelectorAll('.date-tag').forEach(t => {
+            t.classList.toggle('active', t.dataset.key === activeConfig.label);
+        });
+        document.querySelectorAll('.year-group .date-tag').forEach(t => {
+            t.classList.toggle('active', t.dataset.year === String(activeYear));
+        });
+    }
+
+    // 应用某一配置：更新状态 -> 同步选择器 -> 高亮 -> 刷新信息 -> 重新转换
+    function applyConfig(cfg, syncSource) {
+        activeConfig = cfg;
+        activeYear = parseInt(cfg.year, 10);
+        monthPicker.value = cfg.label; // 形如 2026-01，与 <input type="month"> 原生格式一致
+        highlightActive();
+        updateDisplayInfo();
+        sync(syncSource || 'template');
+    }
+
+    // 按选中年份渲染 1~12 月快捷标签
+    function renderMonthTags(year) {
+        tagGroup.innerHTML = '';
+        for (let m = 1; m <= 12; m++) {
+            const cfg = getConfigByYearMonth(year, m);
+            const btn = document.createElement('div');
+            btn.className = 'date-tag';
+            btn.innerText = cfg.label;
+            btn.dataset.key = cfg.label;
+            btn.onclick = () => applyConfig(cfg, 'template');
+            tagGroup.appendChild(btn);
+        }
+    }
+
+    // 渲染快捷年份按钮
+    function renderYearTags() {
+        yearGroup.innerHTML = '';
+        QUICK_YEARS.forEach(y => {
+            const btn = document.createElement('div');
+            btn.className = 'date-tag';
+            btn.innerText = y + ' 年';
+            btn.dataset.year = String(y);
+            btn.onclick = () => {
+                const cfg = getConfigByYearMonth(y, parseInt(activeConfig.month, 10) || 1);
+                renderMonthTags(y);
+                applyConfig(cfg, 'template');
+            };
+            yearGroup.appendChild(btn);
+        });
+    }
+
+    // 月份选择器变更：任意年份/月份（含闰年 2 月）即时重算
+    monthPicker.addEventListener('change', () => {
+        if (!monthPicker.value) return; // 清空时不动作，保留上次有效配置
+        const parts = monthPicker.value.split('-');
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10);
+        const cfg = getConfigByYearMonth(y, m);
+        // 选中年份不在快捷列表时，动态补入，保证快捷标签与选择器始终一致
+        if (!QUICK_YEARS.includes(y)) {
+            QUICK_YEARS.push(y);
+            QUICK_YEARS.sort((a, b) => a - b);
+            renderYearTags();
+        }
+        renderMonthTags(y);
+        applyConfig(cfg, 'template');
+    });
+
+    // 初始执行：默认当前月，若当前月早于快捷年份下限（2025）则退回 2026-01
+    (function init() {
+        const now = new Date();
+        let initYear = now.getFullYear();
+        let initMonth = now.getMonth() + 1;
+        if (initYear < QUICK_YEARS[0] || initYear > QUICK_YEARS[QUICK_YEARS.length - 1]) {
+            initYear = 2026;
+            initMonth = 1;
+        }
+        renderYearTags();
+        renderMonthTags(initYear);
+        applyConfig(getConfigByYearMonth(initYear, initMonth), 'template');
+    })();
+
     function copy(id) {
         const el = document.getElementById(id);
         el.select();
         document.execCommand('copy');
     }
-
-    // 初始执行
-    updateDisplayInfo();
 </script>
 
 </body>
