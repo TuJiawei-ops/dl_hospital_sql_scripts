@@ -4,15 +4,18 @@
   业务说明: 门诊诊察类项目（1043）执行积分持久化（核算单元 × 执行人员 × 项目 × 日期类型 粒度），
             执行科室代码 <> 36 硬隔离（NULL 安全）；学科系数常量 1.0。
   积分口径: 积分 = 项目点数 × 汇总数量 × 学科系数(1.0) × 绩效核算系数
-  模板占位符: '{start_time}' / '{end_time}' / {struct_codes}
+  模板占位符: '{year}' / '{month}' / '{start_time}' / '{end_time}' / {struct_codes}
+
+  修改日志：
+  2026-09-17 17:00:00 | 参数纠偏 | 落库日志表筛选解耦：DELETE 幂等清场与第二区块 CTE_DWD_READ_ALIAS 读取块的账期条件，由 YEAR(CAST('{start_time}' AS DATETIME)) / MONTH(...) 动态日期解析改为 '{year}' / '{month}' 显式参数直取（经 CAST(... AS INT) 与物理列类型对齐）；'{start_time}' / '{end_time}' 严格收敛至底层事实表 dbo.[PF临时医疗服务项目26A] 的 [缴费时间] 精确时间窗口筛选，严禁外溢至汇总日志表操作；头部模板占位符清单补录 '{year}' / '{month}'。计算链路、落库投影与占位符契约零改动。
 */
 
 -- 第一区块：数据生成与持久化（数据生成时忽略 / 查询明细时跳过）
 ~
 
 DELETE FROM [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]
-WHERE [CALC_YEAR]  = YEAR(CAST('{start_time}' AS DATETIME))
-  AND [CALC_MONTH] = MONTH(CAST('{start_time}' AS DATETIME))
+WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
+  AND [CALC_MONTH] = CAST('{month}' AS INT)
   AND [ITEM_CODE]  = N'ITEM_OUTPATIENT_DIAG_SCORE_NON_PED'
 --   AND [UNIT_CODE] IN {struct_codes}
 ;
@@ -295,8 +298,8 @@ WITH CTE_DWD_READ_ALIAS AS (
         [CALC_DETAIL_JSON]      AS [明细JSON],
         [CREATE_TIME]           AS [创建时间]
     FROM [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]
-    WHERE [CALC_YEAR]  = YEAR(CAST('{start_time}' AS DATETIME))
-      AND [CALC_MONTH] = MONTH(CAST('{start_time}' AS DATETIME))
+    WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
+      AND [CALC_MONTH] = CAST('{month}' AS INT)
       AND [ITEM_CODE]  = N'ITEM_OUTPATIENT_DIAG_SCORE_NON_PED'
       AND [UNIT_CODE] IN {struct_codes}
 )
