@@ -10,6 +10,7 @@
 --           及执行归因列 STAFF_CODE / STAFF_NAME（员工）与 DAY_TYPE_CODE / DAY_TYPE_NAME（日期类型）；
 --           原表 DWD_FIN_CALC_DETAIL_LOG 退守二次分配（核算单元 × 员工 × 岗位）粒度。
 -- 修改日志：
+-- 2026-09-18 12:35:00 | 字段微调 | 新增 [RVU_VAL] DECIMAL(18,8) NULL 物理列（单项绩效点数快照列）：列位插入于 [ITEM_CAT_NAME] 之后、[EXEC_ROLE] 之前，保持「项目大类 ➔ 单项点数 ➔ 执行归因」的自然血缘流向；提升一次分配列化核对体验，避免前端与 BI 频繁解析 JSON 仓提取基础 RVU 点值；同步追加列级 MS_Description 扩展属性注释。8 维 UQ 唯一键、4 条检索索引、主键约束与其余物理列零改动。
 -- 2026-09-16 | 维度扩展 | 追加 STAFF_CODE / STAFF_NAME 与 DAY_TYPE_CODE / DAY_TYPE_NAME 维度物理列，设置默认值 NONE 并将 UQ 扩展为 8 维唯一键。
 -- 2026-09-12 22:50:00 | 字段扩展 | 新增 [TOTAL_QTY] DECIMAL(18,8) NULL 物理列（汇总工作量/数量·工分制第一性核对列）：将"工作量/工分"一等公民化，
 --                                      使前端与 BI 无需解析 CALC_DETAIL_JSON 即可直接 SUM(TOTAL_QTY) 完成 工作量 × 点值 业务对账；
@@ -41,6 +42,7 @@ CREATE TABLE [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
     [PROJ_NAME]             NVARCHAR(600)       NULL,       -- 医疗项目/考核指标名称
     [ITEM_CAT_CODE]         NVARCHAR(60)        NULL,       -- 绩效核算大类代码（如 1101/1041 等）
     [ITEM_CAT_NAME]         NVARCHAR(200)       NULL,       -- 绩效核算大类名称
+    [RVU_VAL]               DECIMAL(18,8)       NULL,       -- 单项绩效点数/RVU点值（物理属性快照列，便于前端直拉对比，非主键）
     -- ===== 执行角色维度 =====
     [EXEC_ROLE]             NVARCHAR(20)        NOT NULL
         CONSTRAINT [DF_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_EXEC_ROLE] DEFAULT (N'NONE'), -- 执行角色（医生/技师/护士，非角色切分项默认 'NONE'）
@@ -158,6 +160,9 @@ EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'最终项目�
 
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'汇总工作量/数量（工分制第一性核对列，前端与 BI 可直接 SUM 做业务对账，无需解析 JSON）',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_ALLOC1_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'TOTAL_QTY';
+
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'单项绩效点数/RVU点值（物理属性快照列，便于前端直拉对比，非主键）',
+    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_ALLOC1_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'RVU_VAL';
 
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'计算过程人类可读描述文本（审计穿透与前端明细弹窗）',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_ALLOC1_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'CALC_PROCESS_TEXT';
