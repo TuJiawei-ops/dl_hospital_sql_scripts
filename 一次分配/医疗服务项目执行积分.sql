@@ -1,4 +1,4 @@
-/* ===============================================================================
+﻿/* ===============================================================================
   Relative Path : 一次分配/医疗服务项目执行积分.sql
   脚本名称: 医疗服务项目执行积分.sql
   业务说明: 医疗服务项目执行积分基础数据抽取（按 核算单元 × 收费项目 × 执行角色 粒度），
@@ -28,9 +28,12 @@
   ── 模板占位符 ──
   '{year}'      : 核算年份 (如 '2025')
   '{month}'     : 核算月份 (如 '6')
+  '{start_time}': 核算开始时间 (如 '2024-01-01 00:00:00.000')，仅作用于 fact_raw 事实层时间窗口
+  '{end_time}'  : 核算结束时间 (如 '2024-01-31 23:59:59.997')，仅作用于 fact_raw 事实层时间窗口
   {struct_codes}: 核算单元过滤集 (如 ('10001', '10002'))
 
   修改日志：
+  2026-09-18 10:30:00 | 时间维度重构 | 动态路由门诊/缴费时间与非门诊/执行时间，筛选范围切换为 '{start_time}' 与 '{end_time}' 标准占位符。fact_raw 事实层过滤由固定 [执行时间] 月度半开区间（DATEFROMPARTS(年,月,1) 至次月1日）重构为按 [来源] 动态分流：门诊来源走 [缴费时间] 闭区间，非门诊来源走 [执行时间] 闭区间，两分支均显式 CAST(... AS DATETIME) 避免隐式转换衰减性能，闭区间采用 >= 与 <= 保证 SARGability；WHERE 恒真锚点 1=1 与动态分支独占一行、行首 AND 前缀，保障 -- 单行零副作用隔离。'{year}' / '{month}' 占位符予以保留，其作用域收敛至落库日志表账期幂等清场、BIZ_EPOCH 账期右端点哨兵（契约 §8）及 final 出口账期契约，与事实层时间窗口筛选完全正交，严禁在本次变更中一并移除（否则 BIZ_EPOCH 派生链崩溃）。下游 CTE 链条（dept_dict / dim_version_scope / dim_exec_ratio_raw / joined / cte_role_unpivot / final）、幂等清场、INSERT 落库投影与第二区块读取逻辑零改动。风险登记：若源端存在 [来源]='住院' 且 [执行时间] IS NULL（或 [来源]='门诊' 且 [缴费时间] IS NULL）的记录，两分支均不命中将被静默过滤，需业务侧确认源表完整性；[来源] 物理列可空，非门诊分支已通过 ISNULL(a.[来源], '') 兜底 NULL 语义，防止三值逻辑 UNKNOWN 导致漏数。
   2026-09-18 13:00:00 | 字段微调 | 第一区块持久化 INSERT/SELECT 补齐 [RVU_VAL] 物理列投影，与 DWD_FIN_CALC_ALLOC1_DETAIL_LOG 新增属性列 1:1 对齐（投影源 = final 层已携带的 [RVU_VAL] 单项绩效点数，经 CAST(... AS DECIMAL(18,8)) 收敛至全局强制精度；INSERT 列位插入于 [ITEM_CAT_NAME] 之后、[EXEC_ROLE] 之前）。
   2026-09-14 15:20:00 | 注释极简重构 | 剥离历史演进叙事与冗长推演，将原 20 条纠偏收敛为 8 条原子化约束清单；SQL 逻辑零改动。
   2026-09-14 15:10:00 | 审计文本精简与RVU快照 | 剔除 CALC_PROCESS_TEXT 冗余零加段；dim_version_scope 升级为全字段直连并删除 dim_collapse；追加 [RVU配置快照] 单层嵌套 JSON。
@@ -76,8 +79,11 @@ fact_raw AS (
     FROM dbo.[PF临时医疗服务项目26A] AS a WITH (NOLOCK)
     INNER JOIN dept_dict AS d
         ON a.[执行科室代码] = d.[DEPT_ID]
-    WHERE a.[执行时间] >= DATEFROMPARTS(CAST('{year}' AS INT), CAST('{month}' AS INT), 1)
-      AND a.[执行时间] <  DATEADD(MONTH, 1, DATEFROMPARTS(CAST('{year}' AS INT), CAST('{month}' AS INT), 1))
+    WHERE 1=1
+      AND (
+          (a.[来源] = N'门诊' AND a.[缴费时间] >= CAST('{start_time}' AS DATETIME) AND a.[缴费时间] <= CAST('{end_time}' AS DATETIME))
+          OR (ISNULL(a.[来源], '') <> N'门诊' AND a.[执行时间] >= CAST('{start_time}' AS DATETIME) AND a.[执行时间] <= CAST('{end_time}' AS DATETIME))
+      )
     GROUP BY
         a.[项目代码],
         a.[项目名称],
