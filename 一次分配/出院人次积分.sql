@@ -23,6 +23,7 @@
   {struct_codes}: 核算单元过滤集 (如 ('10001', '10002'))
 
   修改日志:
+  2026-09-18 13:00:00 | 字段微调 | 第一区块持久化 INSERT/SELECT 补齐 [RVU_VAL] 物理列投影，与 DWD_FIN_CALC_ALLOC1_DETAIL_LOG 新增属性列 1:1 对齐（投影源 = src 层已导出的 [RVU] 单项点数，经 CAST(... AS DECIMAL(18,8)) 收敛至全局强制精度；INSERT 列位插入于 [ITEM_CAT_NAME] 之后、[EXEC_ROLE] 之前）。
   2026-09-17 10:30:00 | 映射修正 | 纠偏 PROJ_NAME 映射：在 src CTE 中增加 [项目名称] 映射（1001->出院人次-医生，1002->出院人次-护士），替换落库投影 f.[人员类型] 为 f.[项目名称]，实现 PROJ_CODE 与 PROJ_NAME 完全对齐。
   2026-09-16 21:30:00 | 文件重命名 | 脚本由「出入院服务项目积分.sql」正式更名为「出院人次积分.sql」并同步全链元数据：头部 Relative Path 与脚本名称标注对齐新文件名；落库投影 [SCRIPT_NAME] 常量由 N'出入院服务项目积分.sql' 改为 N'出院人次积分.sql'，保证持久化日志与物理脚本文件精准一致；同步修正跨血缘引用文件 analyses/排查_出院服务未映射核算单元科室明细.sql 的口径溯源标注；核算逻辑、ITEM_CODE、占位符契约与双区块结构零改动。
   2026-09-16 18:00:00 | 格式规范对齐 | 依 .clinerules 第 6 节【占位符条件独占行与 AND 开头法则】审计三处 {struct_codes} 过滤点（DELETE 块 / src CTE / CTE_DWD_READ_ALIAS 块），确认均已独占一行且行首带 AND 前缀，SQL 逻辑零改动；三处上方补录格式规范注释锚点，防范后续同行混写回归破坏 `--` 单行注释隔离能力。
@@ -167,7 +168,7 @@ final AS (
 
 INSERT INTO [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
     [CALC_YEAR], [CALC_MONTH], [ITEM_CODE], [ITEM_NAME], [SCRIPT_NAME],
-    [UNIT_CODE], [UNIT_NAME], [PROJ_CODE], [PROJ_NAME], [ITEM_CAT_CODE], [ITEM_CAT_NAME], [EXEC_ROLE],
+    [UNIT_CODE], [UNIT_NAME], [PROJ_CODE], [PROJ_NAME], [ITEM_CAT_CODE], [ITEM_CAT_NAME], [RVU_VAL], [EXEC_ROLE],
     [STAFF_CODE], [STAFF_NAME], [DAY_TYPE_CODE], [DAY_TYPE_NAME],
     [FINAL_VALUE_TYPE], [FINAL_VALUE], [TOTAL_QTY], [CALC_PROCESS_TEXT], [CALC_DETAIL_JSON], [CREATE_TIME]
 )
@@ -183,6 +184,7 @@ SELECT
     f.[项目名称]                                 AS [PROJ_NAME],
     '1101'                                      AS [ITEM_CAT_CODE],
     N'出入院服务类'                              AS [ITEM_CAT_NAME],
+    CAST(f.[RVU] AS DECIMAL(18,8))              AS [RVU_VAL],
     CASE
         WHEN f.[人员类型编码] = '1001' THEN N'医生'
         WHEN f.[人员类型编码] = '1002' THEN N'护士'
