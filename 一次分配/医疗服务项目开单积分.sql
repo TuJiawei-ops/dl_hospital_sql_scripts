@@ -27,11 +27,14 @@
   1. 【解耦科室名称】取消以 HIS 科室名称作映射桥，改用事实层 [开单科室代码]
      ──(id)──▶ sjjk_bmb_2025_06_01.[编码] ──(HIS_DEPT_CODE)──▶ 直连映射表，全链以编码驱动。
   2. 【单版本直连】RVU 维表移除 ROW_NUMBER() 开窗排序，按单版本 1:1 直连（VERSION_NO 仅作快照属性）。
-  3. 【拉链时间截面】拉链维表按 (HIS_DEPT_CODE, START_DATE) 收敛快照，事实明细以 [START_DATE, END_DATE) 时间窗匹配。
+  3. 【拉链原始映射透传】拉链维表不做任何人工去重收敛，原样透传 sjjk_DEPT_UNIT_MAPPING_2025_11_27
+     的物理映射颗粒度；事实明细以 [START_DATE, END_DATE) 半开区间匹配，落在区间内的多对多
+     映射关系按业务预期产生行级扩散，严禁用 ROW_NUMBER() 折叠导致合法映射静默丢失。
   4. 【RVU 全字段快照】dim_version_scope 升级为全字段 1:1 直连（[ID] 别名 RVU_ID 防主键碰撞），
      JSON 过程仓追加单层嵌套 [RVU配置快照] 节点，留存维度行完整血缘（版本/机构/计费单位/审计人等）。
 
   修改日志：
+  2026-09-18 14:00:00 | 逻辑纠偏 | 彻底剥离 dept_unit_mapping 的 VERSION_RANK 开窗去重逻辑，恢复 sjjk_DEPT_UNIT_MAPPING_2025_11_27 物理映射表的原始颗粒度与预期笛卡尔积。
   2026-09-18 10:30:00 | 时间维度重构 | 动态路由门诊/缴费时间与非门诊/开单时间，筛选范围切换为 '{start_time}' 与 '{end_time}' 标准占位符；规范占位符独占行与 AND 开头法则。
   2026-09-18 13:00:00 | 字段微调 | 第一区块持久化 INSERT/SELECT 补齐 [RVU_VAL] 物理列投影，与 DWD_FIN_CALC_ALLOC1_DETAIL_LOG 新增属性列 1:1 对齐（投影源 = final 层已携带的 [RVU_VAL] 单项绩效点数，经 CAST(... AS DECIMAL(18,8)) 收敛至全局强制精度；INSERT 列位插入于 [ITEM_CAT_NAME] 之后；本脚本无角色维度故不存在 [EXEC_ROLE] 列）。
   2026-09-14 17:00:00 | JSON 过程仓扩展与审计文本瘦身 | dim_version_scope 由 6 列升级为全字段 1:1 直连（[ID] 别名 RVU_ID 防主键碰撞），CALC_DETAIL_JSON 追加单层嵌套 [RVU配置快照] 节点（23 节点，经 JSON_QUERY + FOR JSON PATH 子查询按 PROJ_CODE 回表生成，与姊妹脚本 医疗服务项目执行积分.sql 契约同构）；剔除 CALC_PROCESS_TEXT 末段 "+ 0 = 积分" 恒等零加增熵尾缀，末段直接收敛至最终开单积分。核心算式 DECISION_SCORE 与聚合逻辑零改动。
@@ -76,7 +79,8 @@ WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
 ;
 
 -- 2. 算子计算与持久化落库（bmb_bridge → fact_raw → dept_unit_mapping → dim_version_scope
---    → joined → agg_coff_collapse → agg → final；已解耦科室名称硬关联并剥离单版本开窗收敛）
+--    → joined → agg_coff_collapse → agg → final；已解耦科室名称硬关联并剥离单版本开窗收敛，
+--    拉链维表原样透传不做人工去重折叠）
 WITH
 -- ── Import CTE: 部门字典桥接层（事实层数值主键 [开单科室代码] → 业务编码 [编码]） ──
 --    原样透传数据库物理值，不做任何补零/去空格/格式化加工（查询出来是什么就是什么）。
@@ -110,8 +114,11 @@ fact_raw AS (
       )
 ),
 
--- ── Import CTE: HIS 科室 → 绩效核算单元 拉链维表收敛（锁定最新快照, 防范围膨胀） ──
-dept_unit_mapping_raw AS (
+-- ── Import CTE: HIS 科室 → 绩效核算单元 拉链维表（不做强制去重收敛，透传原始映射关系） ──
+--    物理表 sjjk_DEPT_UNIT_MAPPING_2025_11_27 允许多条映射关系并存（含 START_DATE/END_DATE
+--    拉链时间段内的一对多配置），此为业务预期颗粒度。严禁用 ROW_NUMBER() 人工折叠，
+--    否则会静默丢失合法核算单元映射、导致积分结果偏小。查询出来是什么就是什么。
+dept_unit_mapping AS (
     SELECT
         m.[ID]                          AS MAPPING_ID,
         m.[HIS_DEPT_CODE],
@@ -122,35 +129,6 @@ dept_unit_mapping_raw AS (
         m.[END_DATE]
     FROM dbo.[sjjk_DEPT_UNIT_MAPPING_2025_11_27] AS m WITH (NOLOCK)
     WHERE m.[PERFORM_PERSON_TYPE_CODE] = '1001'
-),
-
--- ── Logical CTE: 拉链维表收敛（按 HIS_DEPT_CODE 强关联键去重，锁定最新快照防范围膨胀） ──
-dept_unit_mapping AS (
-    SELECT
-        r.[MAPPING_ID],
-        r.[HIS_DEPT_CODE],
-        r.[HIS_DEPT_NAME],
-        r.[HPS_DEPT_CODE],
-        r.[HPS_DEPT_NAME],
-        r.[START_DATE],
-        r.[END_DATE],
-        r.[VERSION_RANK]
-    FROM (
-        SELECT
-            r.[MAPPING_ID],
-            r.[HIS_DEPT_CODE],
-            r.[HIS_DEPT_NAME],
-            r.[HPS_DEPT_CODE],
-            r.[HPS_DEPT_NAME],
-            r.[START_DATE],
-            r.[END_DATE],
-            ROW_NUMBER() OVER (
-                PARTITION BY r.[HIS_DEPT_CODE], r.[START_DATE]
-                ORDER BY r.[MAPPING_ID] DESC
-            ) AS VERSION_RANK
-        FROM dept_unit_mapping_raw AS r
-    ) AS r
-    WHERE r.[VERSION_RANK] = 1
 ),
 
 -- ── Import CTE: 绩效大类维表作用域（全字段 1:1 直连，大类剔除前置剪枝；[ID] 别名 RVU_ID 防与日志表主键碰撞） ──
