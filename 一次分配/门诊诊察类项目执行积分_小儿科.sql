@@ -5,8 +5,12 @@
             执行科室代码 36 硬隔离；学科系数常量 1.1。
   积分口径: 积分 = 项目点数 × 汇总数量 × 学科系数(1.1) × 绩效核算系数
   模板占位符: '{year}' / '{month}' / '{start_time}' / '{end_time}' / {struct_codes}
+  参数作用域: '{year}' / '{month}' 仅作用于落库日志表 [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] 的账期幂等清场与第二区块读取；
+             '{start_time}' / '{end_time}' 严格收敛至底层事实表 [dbo].[PF临时医疗服务项目26A] 的 [接诊时间] 精确时间窗口筛选。
 
   修改日志：
+  2026-09-18 14:00:00 | 参数说明纠偏 | 头部补录「参数作用域」注释块：'{start_time}' / '{end_time}' 的语义载体已随本次时间维度变更由 [缴费时间] 迁移至 [接诊时间]，明确其仅作用于事实表 [接诊时间] 精确时间窗口筛选，严禁外溢至落库日志表操作；同时显式声明 '{year}' / '{month}' 的账期清场与读取作用域。历史日志（2026-09-17 17:00:00 条目）为不可篡改履历，其中 [缴费时间] 表述保留原貌，不再回溯改写。
+  2026-09-18 14:00:00 | 时间维度变更 | 将核心维度 [缴费时间] 重构替换为 [接诊时间]，包含事实表时间窗口筛选、关联岗位系数/工作日历的时间维度匹配，以及 final CTE 与落库日志的年份/月份派生列。具体落点：final CTE 派生列 [缴费日期年份]/[缴费日期月份] 更名为 [接诊日期年份]/[接诊日期月份]（YEAR/MONTH 取值源切至 f.[接诊时间]）；LEFT JOIN cte_staff_post 的年份/月份关联条件切至 f.[接诊时间]；LEFT JOIN dbo.[DIM_WORK_CALENDAR] 的 CAST(... AS DATE) 关联条件切至 f.[接诊时间]；WHERE 时间窗口过滤切至 f.[接诊时间]（精准字段比较，无函数包裹，SARGability 完整保留）；GROUP BY 时间分组字段切至 f.[接诊时间]；第一区块 INSERT 的 [CALC_YEAR]/[CALC_MONTH] 投影源与 JSON 序列化 [核算年份]/[核算月份] 映射源同步更正为接诊日期年份/月份列。计算口径（积分 = 项目点数 × 汇总数量 × 学科系数 × 绩效核算系数）、聚合粒度、INSERT 列清单、第二区块读取逻辑与模板占位符契约零改动。
   2026-09-18 13:00:00 | 字段微调 | 第一区块持久化 INSERT/SELECT 补齐 [RVU_VAL] 物理列投影，与 DWD_FIN_CALC_ALLOC1_DETAIL_LOG 新增属性列 1:1 对齐（投影源 = final 层 [项目点数]（由 cte_rvu.[RVU_VAL] 于 L97 经 CAST(... AS DECIMAL(18,8)) 派生），经 CAST(... AS DECIMAL(18,8)) 二次收敛；INSERT 列位插入于 [ITEM_CAT_NAME] 之后、[EXEC_ROLE] 之前）。
   2026-09-18 12:00:00 | 人员黑名单过滤 | 响应业务要求，WHERE 条件追加 (f.[执行人员代码] NOT IN (123, 2523, 2343) OR f.[执行人员代码] IS NULL)，排除管理员(123)、丛勇滋(2523)、马光宇(2343) 等非业务执行人员记录。纠偏说明：源列 dbo.[PF临时医疗服务项目26A].[执行人员代码] 物理类型为 BIGINT（对应 sjjk_ryb_2025_06_01.[id] int 代理主键，属数值 ID 而非业务编码），故黑名单字面量以数值形态书写，严禁 N'123' 字符串字面量触发 BIGINT↔NVARCHAR 隐式转换导致执行计划对源列施加转换与 SARGability 衰减；IS NULL 兜底保留，防止 NOT IN 对 NULL 求值为 UNKNOWN 而静默丢弃执行人员代码为空的记录。计算链路、聚合粒度、落库投影与 JSON 序列化链路零改动。
   2026-09-18 11:20:00 | 唯一约束纠偏 | 根治 UQ_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_BIZ 唯一键冲突：WHERE 追加 f.[来源] = N'门诊' 门诊来源硬隔离（独占一行，保障 -- 单行零副作用隔离）；final CTE 剥离 [来源] / [项目大类] 投影列与 GROUP BY 分组维度，消除同一 核算单元 × 项目 × 执行人员 × 日期类型 粒度下因来源/项目大类差异产生的重复行（唯一键 8 维无 [来源]/[项目大类]，属粒度伪维度）。计算链路（积分 = 项目点数 × 汇总数量 × 学科系数 × 绩效核算系数）、第一区块 INSERT 落库投影、JSON 序列化链路与第二区块读取逻辑零改动。
@@ -120,8 +124,8 @@ SELECT
    ,ISNULL(cal.[DAY_TYPE_NAME], N'正常工作日')                  AS [日期类型名称]
    ,ISNULL(CAST(cal.[PERF_COEFF] AS DECIMAL(18,8)), CAST(1.00000000 AS DECIMAL(18,8))) AS [绩效核算系数]
 
-   ,YEAR(f.[缴费时间])                                        AS [缴费日期年份]
-   ,MONTH(f.[缴费时间])                                       AS [缴费日期月份]
+   ,YEAR(f.[接诊时间])                                        AS [接诊日期年份]
+   ,MONTH(f.[接诊时间])                                       AS [接诊日期月份]
 
    ,CAST(v.[RVU_VAL] * SUM(CAST(f.[数量] AS DECIMAL(18,8))) * CAST(1.1 AS DECIMAL(18,8)) * ISNULL(CAST(cal.[PERF_COEFF] AS DECIMAL(18,8)), CAST(1.00000000 AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS [积分]
    ,CONCAT(
@@ -140,12 +144,12 @@ LEFT JOIN cte_mdm_staff AS mdm_exec
     ON ryb_exec.[src_staff_code] = mdm_exec.[src_staff_code]
 LEFT JOIN cte_staff_post AS sp_exec
     ON mdm_exec.[staff_code] = sp_exec.[staff_code]
-   AND YEAR(f.[缴费时间])    = sp_exec.[year]
-   AND MONTH(f.[缴费时间])   = sp_exec.[month]
+   AND YEAR(f.[接诊时间])    = sp_exec.[year]
+   AND MONTH(f.[接诊时间])   = sp_exec.[month]
 LEFT JOIN dbo.[DIM_WORK_CALENDAR] AS cal WITH (NOLOCK)
-    ON CAST(f.[缴费时间] AS DATE) = cal.[CALC_DATE]
-WHERE f.[缴费时间] >= '{start_time}'
-  AND f.[缴费时间] <= '{end_time}'
+    ON CAST(f.[接诊时间] AS DATE) = cal.[CALC_DATE]
+WHERE f.[接诊时间] >= '{start_time}'
+  AND f.[接诊时间] <= '{end_time}'
   AND f.[来源] = N'门诊'
   AND f.[执行科室代码] = 36
   AND (f.[执行人员代码] NOT IN (123, 2523, 2343) OR f.[执行人员代码] IS NULL)
@@ -164,8 +168,8 @@ GROUP BY
    ,cal.[DAY_TYPE_CODE]
    ,cal.[DAY_TYPE_NAME]
    ,cal.[PERF_COEFF]
-   ,YEAR(f.[缴费时间])
-   ,MONTH(f.[缴费时间])
+   ,YEAR(f.[接诊时间])
+   ,MONTH(f.[接诊时间])
 )
 
 INSERT INTO [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
@@ -175,8 +179,8 @@ INSERT INTO [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
     [FINAL_VALUE_TYPE], [FINAL_VALUE], [TOTAL_QTY], [CALC_PROCESS_TEXT], [CALC_DETAIL_JSON], [CREATE_TIME]
 )
 SELECT
-    CAST(f.[缴费日期年份] AS INT)                       AS [CALC_YEAR],
-    CAST(f.[缴费日期月份] AS INT)                       AS [CALC_MONTH],
+    CAST(f.[接诊日期年份] AS INT)                       AS [CALC_YEAR],
+    CAST(f.[接诊日期月份] AS INT)                       AS [CALC_MONTH],
     N'ITEM_OUTPATIENT_DIAG_SCORE_PED'                  AS [ITEM_CODE],
     N'门诊诊察类项目执行积分_小儿科'                    AS [ITEM_NAME],
     N'门诊诊察类项目执行积分_小儿科.sql'                AS [SCRIPT_NAME],
@@ -203,8 +207,8 @@ SELECT
     )                                                   AS [CALC_PROCESS_TEXT],
     (
         SELECT
-            CAST(f.[缴费日期年份] AS VARCHAR(11))                  AS [核算年份],
-            CAST(f.[缴费日期月份] AS VARCHAR(11))                  AS [核算月份],
+            CAST(f.[接诊日期年份] AS VARCHAR(11))                  AS [核算年份],
+            CAST(f.[接诊日期月份] AS VARCHAR(11))                  AS [核算月份],
             N'ITEM_OUTPATIENT_DIAG_SCORE_PED'                      AS [核算项编码],
             N'门诊诊察类项目执行积分_小儿科'                        AS [核算项名称],
             N'门诊诊察类项目执行积分_小儿科.sql'                    AS [脚本名称],
