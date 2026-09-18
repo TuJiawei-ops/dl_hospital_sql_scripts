@@ -7,6 +7,7 @@
   模板占位符: '{year}' / '{month}' / '{start_time}' / '{end_time}' / {struct_codes}
 
   修改日志：
+  2026-09-18 10:00:00 | 维度解耦 | cte_rvu 解构伪聚合：剥离 GROUP BY v0.[PROJ_CODE] 与 MAX() 聚合函数，遵循零版本寻址与 VERSION_NO 备注化法则，维表直拉 1:1 字段投影。VERSION_NO / VERSION_DESC 降级为普通属性列，严禁作为动态寻址主控条件。
   2026-09-17 18:30:00 | 聚合降维 | final CTE 剥离 [单价] 分组维度：GROUP BY 移除 CAST(f.[单价] AS DECIMAL(18,8))，消除因单价异动/退费记录（如正向 0.00 与退费 1.00 并存）导致的聚合粒度碎片化，从根因上规避 UQ_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_BIZ 唯一约束冲突；SELECT 列表 [单价] 改由 SUM([金额]) ÷ SUM([数量]) 动态计算加权平均单价，并以 CASE WHEN SUM([数量]) = 0 THEN 0 实现零除保护，保障退费净额完全抵消场景不抛错。[数量] / [金额] 维持 SUM 聚合，正反向交易净额抵消口径成立；第一区块 INSERT 落库投影与 JSON 序列化链路零改动。
   2026-09-17 17:00:00 | 参数纠偏 | 落库日志表筛选解耦：DELETE 幂等清场与第二区块 CTE_DWD_READ_ALIAS 读取块的账期条件，由 YEAR(CAST('{start_time}' AS DATETIME)) / MONTH(...) 动态日期解析改为 '{year}' / '{month}' 显式参数直取（经 CAST(... AS INT) 与物理列类型对齐）；'{start_time}' / '{end_time}' 严格收敛至底层事实表 dbo.[PF临时医疗服务项目26A] 的 [缴费时间] 精确时间窗口筛选，严禁外溢至汇总日志表操作；头部模板占位符清单补录 '{year}' / '{month}'。计算链路、落库投影与占位符契约零改动。
 */
@@ -25,31 +26,30 @@ WITH
 cte_rvu AS (
     SELECT
         v0.[PROJ_CODE]                              AS PROJ_CODE
-       ,MAX(v0.[VERSION_NO])                        AS VERSION_NO
-       ,MAX(v0.[VERSION_DESC])                      AS VERSION_DESC
-       ,MAX(v0.[ORG_CODE])                          AS ORG_CODE
-       ,MAX(v0.[ORG_NAME])                          AS ORG_NAME
-       ,MAX(v0.[SRC_SYS_CODE])                      AS SRC_SYS_CODE
-       ,MAX(v0.[PROJ_NAME])                         AS PROJ_NAME
-       ,MAX(v0.[MEAS_UNIT])                         AS MEAS_UNIT
-       ,MAX(v0.[ITEM_CAT_CODE])                     AS ITEM_CAT_CODE
-       ,MAX(v0.[ITEM_CAT_NAME])                     AS ITEM_CAT_NAME
-       ,MAX(v0.[OPR_LEVEL_CODE])                    AS OPR_LEVEL_CODE
-       ,MAX(v0.[OPR_LEVEL_NAME])                    AS OPR_LEVEL_NAME
-       ,MAX(v0.[CREATE_USER])                       AS CREATE_USER
-       ,MAX(v0.[CREATE_TIME])                       AS CREATE_TIME
-       ,MAX(v0.[UPDATE_USER])                       AS UPDATE_USER
-       ,MAX(v0.[UPDATE_TIME])                       AS UPDATE_TIME
-       ,MAX(v0.[REMARK])                            AS REMARK
-       ,MAX(v0.[SCORE_REASON])                      AS SCORE_REASON
-       ,CAST(MAX(v0.[RVU_VAL])       AS DECIMAL(18,8))  AS RVU_VAL
-       ,CAST(MAX(v0.[EXEC_COFF])     AS DECIMAL(18,8))  AS EXEC_COFF
-       ,CAST(MAX(v0.[DECISION_COFF]) AS DECIMAL(18,8))  AS DECISION_COFF
-       ,CAST(MAX(v0.[UNIT_PRICE])    AS DECIMAL(18,8))  AS UNIT_PRICE
+       ,v0.[VERSION_NO]                             AS VERSION_NO
+       ,v0.[VERSION_DESC]                           AS VERSION_DESC
+       ,v0.[ORG_CODE]                               AS ORG_CODE
+       ,v0.[ORG_NAME]                               AS ORG_NAME
+       ,v0.[SRC_SYS_CODE]                           AS SRC_SYS_CODE
+       ,v0.[PROJ_NAME]                              AS PROJ_NAME
+       ,v0.[MEAS_UNIT]                              AS MEAS_UNIT
+       ,v0.[ITEM_CAT_CODE]                          AS ITEM_CAT_CODE
+       ,v0.[ITEM_CAT_NAME]                          AS ITEM_CAT_NAME
+       ,v0.[OPR_LEVEL_CODE]                         AS OPR_LEVEL_CODE
+       ,v0.[OPR_LEVEL_NAME]                         AS OPR_LEVEL_NAME
+       ,v0.[CREATE_USER]                            AS CREATE_USER
+       ,v0.[CREATE_TIME]                            AS CREATE_TIME
+       ,v0.[UPDATE_USER]                            AS UPDATE_USER
+       ,v0.[UPDATE_TIME]                            AS UPDATE_TIME
+       ,v0.[REMARK]                                 AS REMARK
+       ,v0.[SCORE_REASON]                           AS SCORE_REASON
+       ,CAST(v0.[RVU_VAL]       AS DECIMAL(18,8))  AS RVU_VAL
+       ,CAST(v0.[EXEC_COFF]     AS DECIMAL(18,8))  AS EXEC_COFF
+       ,CAST(v0.[DECISION_COFF] AS DECIMAL(18,8))  AS DECISION_COFF
+       ,CAST(v0.[UNIT_PRICE]    AS DECIMAL(18,8))  AS UNIT_PRICE
     FROM dbo.[DIM_PRF_ITEM_RVU_VERSION] AS v0 WITH (NOLOCK)
     WHERE v0.[PROJ_CODE] IS NOT NULL
       AND v0.[ITEM_CAT_CODE] = '1043'
-    GROUP BY v0.[PROJ_CODE]
 )
 ,cte_ryb AS (
     SELECT
