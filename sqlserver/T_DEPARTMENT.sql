@@ -13,6 +13,12 @@
  File Encoding         : 65001
 
  Date: 14/09/2026 11:16:10
+
+  Relative Path         : sqlserver/T_DEPARTMENT.sql
+
+  修改日志：
+  2026-09-18 12:20:00 | 结构扩展 Patch | 文件末尾追加职系属性字段增量 DDL Patch：新增 [series_code] VARCHAR(50) 与 [series_name] VARCHAR(100) 两列（均 NOT NULL + DEFAULT ''，保障存量行 ADD NOT NULL 时零约束冲突），并补齐列级 MS_Description 扩展属性注释。采用 IF COL_LENGTH(...) IS NULL 幂等守卫包裹，重复执行零报错；零 DROP TABLE、零存量 DDL 重写。严格遵循全局禁 GO 协议，Patch 以单批分号结束形态落地，与既有 Navicat dump 骨架的 GO 批处理形态物理隔离、互不干扰。
+
 */
 
 
@@ -281,4 +287,40 @@ ALTER TABLE [dbo].[T_DEPARTMENT] ADD CONSTRAINT [PK__T_DEPART__3214EC272D3D5388]
 WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON)  
 ON [PRIMARY]
 GO
+
+
+-- =================================================================
+-- 增量 Patch：2026-09-18 增加职系属性字段
+-- 业务定义：扩展部门维度，补充 [series_code] 与 [series_name] 职系属性及元数据注释
+-- 执行性质：生产环境已运行表的原地 ALTER TABLE 增量扩展，幂等可重复执行
+-- 衔接说明：本区块为单批分号结束形态（零 GO），与上方 Navicat dump 骨架物理隔离
+-- =================================================================
+
+-- 1. 追加字段 [series_code] (所属职系编码)
+IF COL_LENGTH(N'[dbo].[T_DEPARTMENT]', N'series_code') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[T_DEPARTMENT]
+    ADD [series_code] VARCHAR(50) NOT NULL CONSTRAINT [df_T_DEPARTMENT_series_code] DEFAULT '';
+
+    EXEC sys.sp_addextendedproperty
+        @name = N'MS_Description',
+        @value = N'所属职系编码',
+        @level0type = N'SCHEMA', @level0name = N'dbo',
+        @level1type = N'TABLE',  @level1name = N'T_DEPARTMENT',
+        @level2type = N'COLUMN', @level2name = N'series_code';
+END;
+
+-- 2. 追加字段 [series_name] (所属职系名称)
+IF COL_LENGTH(N'[dbo].[T_DEPARTMENT]', N'series_name') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[T_DEPARTMENT]
+    ADD [series_name] VARCHAR(100) NOT NULL CONSTRAINT [df_T_DEPARTMENT_series_name] DEFAULT '';
+
+    EXEC sys.sp_addextendedproperty
+        @name = N'MS_Description',
+        @value = N'所属职系名称',
+        @level0type = N'SCHEMA', @level0name = N'dbo',
+        @level1type = N'TABLE',  @level1name = N'T_DEPARTMENT',
+        @level2type = N'COLUMN', @level2name = N'series_name';
+END;
 
