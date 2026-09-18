@@ -50,6 +50,7 @@
   {struct_codes}: 核算单元过滤集 (如 ('10001', '10002'))
 
   修改日志
+  2026-09-18 13:00:00 | 字段微调 | 第一区块持久化 INSERT/SELECT 补齐 [RVU_VAL] 物理列投影，与 DWD_FIN_CALC_ALLOC1_DETAIL_LOG 新增属性列 1:1 对齐（投影源 = final 层已透传的 [RVU] 单项点数，经 CAST(... AS DECIMAL(18,8)) 收敛至全局强制精度；INSERT 列位插入于 [ITEM_CAT_NAME] 之后、[EXEC_ROLE] 之前）。
   2026-09-17 10:15:00 | 细节文本化 | 依 .clinerules 规范，将第二区块 CTE_DWD_READ_ALIAS 中的 [CREATE_TIME] 显式文本化为 CONVERT(VARCHAR(19), [CREATE_TIME], 120) AS [创建时间]。
   2026-09-17 10:00:00 | 架构持久化 | Envelope Pattern 双区块重构：前置幂等 DELETE，计算链路封装落库至 DWD_FIN_CALC_ALLOC1_DETAIL_LOG（ITEM_CODE='ITEM_ADM_NOTICE_SCORE'），明细收敛入 CALC_DETAIL_JSON；第二区块以波浪号隔离，严格承接 struct_code/struct_name/result_value 模板契约。
   2026-09-17 09:55:00 | 指标扩展 | 通过项目编码关联 DIM_PRF_ITEM_RVU_VERSION 维表提取 RVU，计算积分(人次数*RVU)，并依据四段式规范拼接积分详解审计文本。
@@ -179,7 +180,7 @@ final AS (
 -- 3. 投影落库（账期常量经 SELECT 投影；JSON 过程仓承载全量中间因子与 RVU 配置快照）
 INSERT INTO [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
     [CALC_YEAR], [CALC_MONTH], [ITEM_CODE], [ITEM_NAME], [SCRIPT_NAME],
-    [UNIT_CODE], [UNIT_NAME], [PROJ_CODE], [PROJ_NAME], [ITEM_CAT_CODE], [ITEM_CAT_NAME], [EXEC_ROLE],
+    [UNIT_CODE], [UNIT_NAME], [PROJ_CODE], [PROJ_NAME], [ITEM_CAT_CODE], [ITEM_CAT_NAME], [RVU_VAL], [EXEC_ROLE],
     [STAFF_CODE], [STAFF_NAME], [DAY_TYPE_CODE], [DAY_TYPE_NAME],
     [FINAL_VALUE_TYPE], [FINAL_VALUE], [TOTAL_QTY], [CALC_PROCESS_TEXT], [CALC_DETAIL_JSON], [CREATE_TIME]
 )
@@ -195,6 +196,7 @@ SELECT
     f.[项目名称]                                 AS [PROJ_NAME],
     '1101'                                      AS [ITEM_CAT_CODE],
     N'出入院服务类'                              AS [ITEM_CAT_NAME],
+    CAST(f.[RVU] AS DECIMAL(18,8))              AS [RVU_VAL],
     N'医生'                                     AS [EXEC_ROLE],
     ISNULL(f.[标准员工工号], N'NONE')            AS [STAFF_CODE],
     ISNULL(f.[开单人], N'NONE')                  AS [STAFF_NAME],

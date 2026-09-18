@@ -55,6 +55,7 @@
   {struct_codes}: 核算单元过滤集 (如 ('10001', '10002'))
 
   修改日志：
+  2026-09-18 13:00:00 | 字段微调 | 第一区块持久化 INSERT/SELECT 补齐 [RVU_VAL] 物理列投影，与 DWD_FIN_CALC_ALLOC1_DETAIL_LOG 新增属性列 1:1 对齐（投影源 = final 层已透传的 [RVU] 单项点数，经 CAST(... AS DECIMAL(18,8)) 收敛至全局强制精度；INSERT 列位插入于 [ITEM_CAT_NAME] 之后、[EXEC_ROLE] 之前）。
   2026-09-17 16:00:00 | 架构持久化 | Envelope Pattern 双区块重构：新增第一区块（波浪号隔离前）前置幂等 DELETE（按 CALC_YEAR/CALC_MONTH/ITEM_CODE='ITEM_TCM_ADVANTAGE_DISEASE_SCORE'/UNIT_CODE 清场，覆盖 UQ 前 4 列故语义安全），计算链路封装为 cte_rvu → src → final（final 层年份/月份强制文本化并生成四段式审计文本），INSERT 落至 DWD_FIN_CALC_ALLOC1_DETAIL_LOG（FINAL_VALUE=入组积分 / TOTAL_QTY=入组人次 / EXEC_ROLE=执行人员类型，病种与 RVU 配置快照经 FOR JSON PATH 收敛入 CALC_DETAIL_JSON）；第二区块以波浪号隔离，CTE_DWD_READ_ALIAS 读取物理表并严格承接 struct_code/struct_name/result_value 模板契约；头部业务定义、依赖契约、关键纠偏与占位符清单同步对齐落库口径。
   2026-09-17 15:00:00 | 指标扩展 | 引入 RVU 关联与入组积分计算：SELECT 投影新增 CASE WHEN 衍生项目编码映射（A08.01.02×1001→'METRIC_DRG_DZHZ_DOCTOR'、A08.01.02×1002→'METRIC_DRG_DZHZ_NURSE'、A08.01.15×1001→'METRIC_DRG_YXB_DOCTOR'、A08.01.15×1002→'METRIC_DRG_YXB_NURSE'），并 LEFT JOIN dbo.[DIM_PRF_ITEM_RVU_VERSION]（限定 ORG_CODE='1001'，零版本寻址 1:1 直连）取 [RVU_VAL]；新增导出 [衍生项目编码] / [RVU] / [入组积分]（= COUNT(1) × ISNULL(RVU_VAL,0)，DECIMAL(18,8) 精度），GROUP BY 同步纳入衍生项目编码表达式与 rvu.[RVU_VAL]；头部依赖契约与关键纠偏补录 RVU 维表血缘、零版本寻址与积分口径锚点；时间/占位符过滤与拉链时效边界零改动。
   2026-09-17 14:10:00 | 拉链时效闭环 | 映射表关联补全渐变维（SCD Type 2）时效边界：[settle_time] >= [START_DATE]（容忍 [START_DATE] 空值）且 [settle_time] <= [END_DATE]（容忍 [END_DATE] 空值）双条件下沉至 ON 子句，消除跨版本重叠匹配导致的行级膨胀与人次翻倍；同步在头部依赖契约与关键纠偏块补录拉链表时效闭环规范锚点。输出字段、降维粒度、占位符契约与 WHERE 过滤逻辑零改动。
@@ -212,7 +213,7 @@ final AS (
 
 INSERT INTO [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
     [CALC_YEAR], [CALC_MONTH], [ITEM_CODE], [ITEM_NAME], [SCRIPT_NAME],
-    [UNIT_CODE], [UNIT_NAME], [PROJ_CODE], [PROJ_NAME], [ITEM_CAT_CODE], [ITEM_CAT_NAME], [EXEC_ROLE],
+    [UNIT_CODE], [UNIT_NAME], [PROJ_CODE], [PROJ_NAME], [ITEM_CAT_CODE], [ITEM_CAT_NAME], [RVU_VAL], [EXEC_ROLE],
     [STAFF_CODE], [STAFF_NAME], [DAY_TYPE_CODE], [DAY_TYPE_NAME],
     [FINAL_VALUE_TYPE], [FINAL_VALUE], [TOTAL_QTY], [CALC_PROCESS_TEXT], [CALC_DETAIL_JSON], [CREATE_TIME]
 )
@@ -228,6 +229,7 @@ SELECT
     f.[病种名称]                                 AS [PROJ_NAME],
     '1101'                                      AS [ITEM_CAT_CODE],
     N'出入院服务类'                              AS [ITEM_CAT_NAME],
+    CAST(f.[RVU] AS DECIMAL(18,8))              AS [RVU_VAL],
     -- 执行角色承担人员类型切分（UQ 第 6 列），严禁退化为常量 NONE
     ISNULL(CAST(f.[执行人员类型名称] AS NVARCHAR(20)), N'NONE') AS [EXEC_ROLE],
     N'NONE'                                     AS [STAFF_CODE],

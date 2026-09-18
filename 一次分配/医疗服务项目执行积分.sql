@@ -31,6 +31,7 @@
   {struct_codes}: 核算单元过滤集 (如 ('10001', '10002'))
 
   修改日志：
+  2026-09-18 13:00:00 | 字段微调 | 第一区块持久化 INSERT/SELECT 补齐 [RVU_VAL] 物理列投影，与 DWD_FIN_CALC_ALLOC1_DETAIL_LOG 新增属性列 1:1 对齐（投影源 = final 层已携带的 [RVU_VAL] 单项绩效点数，经 CAST(... AS DECIMAL(18,8)) 收敛至全局强制精度；INSERT 列位插入于 [ITEM_CAT_NAME] 之后、[EXEC_ROLE] 之前）。
   2026-09-14 15:20:00 | 注释极简重构 | 剥离历史演进叙事与冗长推演，将原 20 条纠偏收敛为 8 条原子化约束清单；SQL 逻辑零改动。
   2026-09-14 15:10:00 | 审计文本精简与RVU快照 | 剔除 CALC_PROCESS_TEXT 冗余零加段；dim_version_scope 升级为全字段直连并删除 dim_collapse；追加 [RVU配置快照] 单层嵌套 JSON。
   2026-09-14 14:20:00 | 预聚合层解耦重构 | 新增 cte_role_unpivot 实现跨 HIS 科室预聚合，final 降级为纯 1:1 契约投影 + 综合比例反推。
@@ -234,7 +235,7 @@ final AS (
 
 INSERT INTO [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
     [CALC_YEAR], [CALC_MONTH], [ITEM_CODE], [ITEM_NAME], [SCRIPT_NAME],
-    [UNIT_CODE], [UNIT_NAME], [PROJ_CODE], [PROJ_NAME], [ITEM_CAT_CODE], [ITEM_CAT_NAME], [EXEC_ROLE],
+    [UNIT_CODE], [UNIT_NAME], [PROJ_CODE], [PROJ_NAME], [ITEM_CAT_CODE], [ITEM_CAT_NAME], [RVU_VAL], [EXEC_ROLE],
     [FINAL_VALUE_TYPE], [FINAL_VALUE], [TOTAL_QTY], [CALC_PROCESS_TEXT], [CALC_DETAIL_JSON], [CREATE_TIME]
 )
 SELECT
@@ -249,6 +250,7 @@ SELECT
     f.[PROJ_NAME]                                   AS [PROJ_NAME],
     f.[ITEM_CAT_CODE]                               AS [ITEM_CAT_CODE],
     f.[ITEM_CAT_NAME]                               AS [ITEM_CAT_NAME],
+    CAST(f.[RVU_VAL] AS DECIMAL(18,8))              AS [RVU_VAL],
     f.[EXEC_ROLE]                                   AS [EXEC_ROLE],
     N'SCORE'                                        AS [FINAL_VALUE_TYPE],
     CAST(f.[EXEC_POINTS] AS DECIMAL(18,8))          AS [FINAL_VALUE],

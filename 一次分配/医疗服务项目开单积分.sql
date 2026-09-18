@@ -32,6 +32,7 @@
      JSON 过程仓追加单层嵌套 [RVU配置快照] 节点，留存维度行完整血缘（版本/机构/计费单位/审计人等）。
 
   修改日志：
+  2026-09-18 13:00:00 | 字段微调 | 第一区块持久化 INSERT/SELECT 补齐 [RVU_VAL] 物理列投影，与 DWD_FIN_CALC_ALLOC1_DETAIL_LOG 新增属性列 1:1 对齐（投影源 = final 层已携带的 [RVU_VAL] 单项绩效点数，经 CAST(... AS DECIMAL(18,8)) 收敛至全局强制精度；INSERT 列位插入于 [ITEM_CAT_NAME] 之后；本脚本无角色维度故不存在 [EXEC_ROLE] 列）。
   2026-09-14 17:00:00 | JSON 过程仓扩展与审计文本瘦身 | dim_version_scope 由 6 列升级为全字段 1:1 直连（[ID] 别名 RVU_ID 防主键碰撞），CALC_DETAIL_JSON 追加单层嵌套 [RVU配置快照] 节点（23 节点，经 JSON_QUERY + FOR JSON PATH 子查询按 PROJ_CODE 回表生成，与姊妹脚本 医疗服务项目执行积分.sql 契约同构）；剔除 CALC_PROCESS_TEXT 末段 "+ 0 = 积分" 恒等零加增熵尾缀，末段直接收敛至最终开单积分。核心算式 DECISION_SCORE 与聚合逻辑零改动。
   2026-09-14 16:30:00 | 键匹配精简 | 移除 bmb_bridge / fact_raw 中 HIS_DEPT_CODE 的 RIGHT 补零与 RTRIM/LTRIM 格式化拼接，改为字典层 [编码] 原值直连匹配；头部纠偏收敛为 3 条核心架构决策。
   2026-09-14 16:00:00 | 强主键关联与维表降维 | 引入部门字典 id->编码 强关联解耦名称：新增 bmb_bridge CTE，以 [开单科室代码](BIGINT) 直连 sjjk_bmb_2025_06_01.id 取出 [编码] 精准匹配拉链维表；删除 fact_raw_keyed（HIS_DEPT_NAME_KEY 字符串归一）并将 dept_unit_mapping 的 ROW_NUMBER() 分区键由 HIS_DEPT_NAME 改为 HIS_DEPT_CODE，joined 关联条件同步改键。简化单版本 RVU 维表获取：删除 dim_latest_version / dim_pick 两层开窗收敛 CTE，dim_version_scope 直接 1:1 供 joined 消费，VERSION_NO 退化为纯快照属性。下游积分算式与落库、第二区块读取逻辑零改动。
@@ -272,7 +273,7 @@ final AS (
 
 INSERT INTO [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
     [CALC_YEAR], [CALC_MONTH], [ITEM_CODE], [ITEM_NAME], [SCRIPT_NAME],
-    [UNIT_CODE], [UNIT_NAME], [PROJ_CODE], [PROJ_NAME], [ITEM_CAT_CODE], [ITEM_CAT_NAME],
+    [UNIT_CODE], [UNIT_NAME], [PROJ_CODE], [PROJ_NAME], [ITEM_CAT_CODE], [ITEM_CAT_NAME], [RVU_VAL],
     [FINAL_VALUE_TYPE], [FINAL_VALUE], [TOTAL_QTY], [CALC_PROCESS_TEXT], [CALC_DETAIL_JSON], [CREATE_TIME]
 )
 SELECT
@@ -287,6 +288,7 @@ SELECT
     f.[PROJ_NAME]                               AS [PROJ_NAME],
     f.[ITEM_CAT_CODE]                           AS [ITEM_CAT_CODE],
     f.[ITEM_CAT_NAME]                           AS [ITEM_CAT_NAME],
+    CAST(f.[RVU_VAL] AS DECIMAL(18,8))          AS [RVU_VAL],
     N'SCORE'                                    AS [FINAL_VALUE_TYPE],
     CAST(f.[DECISION_SCORE] AS DECIMAL(18,8))   AS [FINAL_VALUE],
     CAST(f.[TOTAL_QTY]      AS DECIMAL(18,8))   AS [TOTAL_QTY],

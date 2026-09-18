@@ -7,6 +7,7 @@
   模板占位符: '{year}' / '{month}' / '{start_time}' / '{end_time}' / {struct_codes}
 
   修改日志：
+  2026-09-18 13:00:00 | 字段微调 | 第一区块持久化 INSERT/SELECT 补齐 [RVU_VAL] 物理列投影，与 DWD_FIN_CALC_ALLOC1_DETAIL_LOG 新增属性列 1:1 对齐（投影源 = final 层 [项目点数]（由 cte_rvu.[RVU_VAL] 于 L97 经 CAST(... AS DECIMAL(18,8)) 派生），经 CAST(... AS DECIMAL(18,8)) 二次收敛；INSERT 列位插入于 [ITEM_CAT_NAME] 之后、[EXEC_ROLE] 之前）。
   2026-09-18 12:00:00 | 人员黑名单过滤 | 响应业务要求，WHERE 条件追加 (f.[执行人员代码] NOT IN (123, 2523, 2343) OR f.[执行人员代码] IS NULL)，排除管理员(123)、丛勇滋(2523)、马光宇(2343) 等非业务执行人员记录。纠偏说明：源列 dbo.[PF临时医疗服务项目26A].[执行人员代码] 物理类型为 BIGINT（对应 sjjk_ryb_2025_06_01.[id] int 代理主键，属数值 ID 而非业务编码），故黑名单字面量以数值形态书写，严禁 N'123' 字符串字面量触发 BIGINT↔NVARCHAR 隐式转换导致执行计划对源列施加转换与 SARGability 衰减；IS NULL 兜底保留，防止 NOT IN 对 NULL 求值为 UNKNOWN 而静默丢弃执行人员代码为空的记录。计算链路、聚合粒度、落库投影与 JSON 序列化链路零改动。
   2026-09-18 11:20:00 | 唯一约束纠偏 | 根治 UQ_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_BIZ 唯一键冲突：WHERE 追加 f.[来源] = N'门诊' 门诊来源硬隔离（独占一行，保障 -- 单行零副作用隔离）；final CTE 剥离 [来源] / [项目大类] 投影列与 GROUP BY 分组维度，消除同一 核算单元 × 项目 × 执行人员 × 日期类型 粒度下因来源/项目大类差异产生的重复行（唯一键 8 维无 [来源]/[项目大类]，属粒度伪维度）。计算链路（积分 = 项目点数 × 汇总数量 × 学科系数 × 绩效核算系数）、第一区块 INSERT 落库投影、JSON 序列化链路与第二区块读取逻辑零改动。
   2026-09-18 10:00:00 | 维度解耦 | cte_rvu 解构伪聚合：剥离 GROUP BY v0.[PROJ_CODE] 与 MAX() 聚合函数，遵循零版本寻址与 VERSION_NO 备注化法则，维表直拉 1:1 字段投影。VERSION_NO / VERSION_DESC 降级为普通属性列，严禁作为动态寻址主控条件。
@@ -169,7 +170,7 @@ GROUP BY
 
 INSERT INTO [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
     [CALC_YEAR], [CALC_MONTH], [ITEM_CODE], [ITEM_NAME], [SCRIPT_NAME],
-    [UNIT_CODE], [UNIT_NAME], [PROJ_CODE], [PROJ_NAME], [ITEM_CAT_CODE], [ITEM_CAT_NAME],
+    [UNIT_CODE], [UNIT_NAME], [PROJ_CODE], [PROJ_NAME], [ITEM_CAT_CODE], [ITEM_CAT_NAME], [RVU_VAL],
     [EXEC_ROLE], [STAFF_CODE], [STAFF_NAME], [DAY_TYPE_CODE], [DAY_TYPE_NAME],
     [FINAL_VALUE_TYPE], [FINAL_VALUE], [TOTAL_QTY], [CALC_PROCESS_TEXT], [CALC_DETAIL_JSON], [CREATE_TIME]
 )
@@ -185,6 +186,7 @@ SELECT
     f.[项目名称]                                        AS [PROJ_NAME],
     f.[绩效大类编码]                                    AS [ITEM_CAT_CODE],
     f.[绩效大类名称]                                    AS [ITEM_CAT_NAME],
+    CAST(f.[项目点数] AS DECIMAL(18,8))                 AS [RVU_VAL],
     N'执行人员'                                         AS [EXEC_ROLE],
     ISNULL(mdm_exec_staff.[staff_code], N'未匹配')      AS [STAFF_CODE],
     f.[执行人员]                                        AS [STAFF_NAME],
