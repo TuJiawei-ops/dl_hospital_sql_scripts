@@ -7,6 +7,7 @@
   模板占位符: '{year}' / '{month}' / '{start_time}' / '{end_time}' / {struct_codes}
 
   修改日志：
+  2026-09-17 18:30:00 | 聚合降维 | final CTE 剥离 [单价] 分组维度：GROUP BY 移除 CAST(f.[单价] AS DECIMAL(18,8))，消除因单价异动/退费记录（如正向 0.00 与退费 1.00 并存）导致的聚合粒度碎片化，从根因上规避 UQ_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_BIZ 唯一约束冲突；SELECT 列表 [单价] 改由 SUM([金额]) ÷ SUM([数量]) 动态计算加权平均单价，并以 CASE WHEN SUM([数量]) = 0 THEN 0 实现零除保护，保障退费净额完全抵消场景不抛错。[数量] / [金额] 维持 SUM 聚合，正反向交易净额抵消口径成立；第一区块 INSERT 落库投影与 JSON 序列化链路零改动。
   2026-09-17 17:00:00 | 参数纠偏 | 落库日志表筛选解耦：DELETE 幂等清场与第二区块 CTE_DWD_READ_ALIAS 读取块的账期条件，由 YEAR(CAST('{start_time}' AS DATETIME)) / MONTH(...) 动态日期解析改为 '{year}' / '{month}' 显式参数直取（经 CAST(... AS INT) 与物理列类型对齐）；'{start_time}' / '{end_time}' 严格收敛至底层事实表 dbo.[PF临时医疗服务项目26A] 的 [缴费时间] 精确时间窗口筛选，严禁外溢至汇总日志表操作；头部模板占位符清单补录 '{year}' / '{month}'。计算链路、落库投影与占位符契约零改动。
 */
 
@@ -97,7 +98,12 @@ SELECT
    ,CAST(v.[RVU_VAL]   AS DECIMAL(18,8))                      AS [项目点数]
    ,CAST(v.[EXEC_COFF] AS DECIMAL(18,8))                      AS [执行系数]
 
-   ,CAST(f.[单价] AS DECIMAL(18,8))                           AS [单价]
+    -- 【聚合降维】剥离 f.[单价] 分组维度：正反向交易（退费/异动）归并后按 金额 ÷ 数量 动态计算加权平均单价
+    -- 【零除保护】汇总数量为 0（净额完全抵消）时单价兜底为 0，严禁裸除法
+   ,CASE
+        WHEN SUM(CAST(f.[数量] AS DECIMAL(18,8))) = 0 THEN CAST(0 AS DECIMAL(18,8))
+        ELSE CAST(SUM(CAST(f.[金额] AS DECIMAL(18,8))) / SUM(CAST(f.[数量] AS DECIMAL(18,8))) AS DECIMAL(18,8))
+    END                                                       AS [单价]
    ,SUM(CAST(f.[数量] AS DECIMAL(18,8)))                      AS [数量]
    ,SUM(CAST(f.[金额] AS DECIMAL(18,8)))                      AS [金额]
 
@@ -150,7 +156,6 @@ GROUP BY
    ,v.[ITEM_CAT_NAME]
    ,v.[RVU_VAL]
    ,v.[EXEC_COFF]
-   ,CAST(f.[单价] AS DECIMAL(18,8))
    ,f.[执行人员代码]
    ,f.[执行人员]
    ,ISNULL(sp_exec.[unit_code], N'未匹配')
