@@ -32,6 +32,7 @@
      JSON 过程仓追加单层嵌套 [RVU配置快照] 节点，留存维度行完整血缘（版本/机构/计费单位/审计人等）。
 
   修改日志：
+  2026-09-18 10:30:00 | 时间维度重构 | 动态路由门诊/缴费时间与非门诊/开单时间，筛选范围切换为 '{start_time}' 与 '{end_time}' 标准占位符；规范占位符独占行与 AND 开头法则。
   2026-09-18 13:00:00 | 字段微调 | 第一区块持久化 INSERT/SELECT 补齐 [RVU_VAL] 物理列投影，与 DWD_FIN_CALC_ALLOC1_DETAIL_LOG 新增属性列 1:1 对齐（投影源 = final 层已携带的 [RVU_VAL] 单项绩效点数，经 CAST(... AS DECIMAL(18,8)) 收敛至全局强制精度；INSERT 列位插入于 [ITEM_CAT_NAME] 之后；本脚本无角色维度故不存在 [EXEC_ROLE] 列）。
   2026-09-14 17:00:00 | JSON 过程仓扩展与审计文本瘦身 | dim_version_scope 由 6 列升级为全字段 1:1 直连（[ID] 别名 RVU_ID 防主键碰撞），CALC_DETAIL_JSON 追加单层嵌套 [RVU配置快照] 节点（23 节点，经 JSON_QUERY + FOR JSON PATH 子查询按 PROJ_CODE 回表生成，与姊妹脚本 医疗服务项目执行积分.sql 契约同构）；剔除 CALC_PROCESS_TEXT 末段 "+ 0 = 积分" 恒等零加增熵尾缀，末段直接收敛至最终开单积分。核心算式 DECISION_SCORE 与聚合逻辑零改动。
   2026-09-14 16:30:00 | 键匹配精简 | 移除 bmb_bridge / fact_raw 中 HIS_DEPT_CODE 的 RIGHT 补零与 RTRIM/LTRIM 格式化拼接，改为字典层 [编码] 原值直连匹配；头部纠偏收敛为 3 条核心架构决策。
@@ -102,8 +103,11 @@ fact_raw AS (
     FROM dbo.[PF临时医疗服务项目26A] AS a WITH (NOLOCK)
     INNER JOIN bmb_bridge AS b
         ON a.[开单科室代码] = b.[DEPT_ID]
-    WHERE a.[开单时间] >= DATEFROMPARTS(CAST('{year}' AS INT), CAST('{month}' AS INT), 1)
-      AND a.[开单时间] <  DATEADD(MONTH, 1, DATEFROMPARTS(CAST('{year}' AS INT), CAST('{month}' AS INT), 1))
+    WHERE 1=1
+      AND (
+          (a.[来源] = N'门诊' AND a.[缴费时间] >= CAST('{start_time}' AS DATETIME) AND a.[缴费时间] <= CAST('{end_time}' AS DATETIME))
+          OR (ISNULL(a.[来源], '') <> N'门诊' AND a.[开单时间] >= CAST('{start_time}' AS DATETIME) AND a.[开单时间] <= CAST('{end_time}' AS DATETIME))
+      )
 ),
 
 -- ── Import CTE: HIS 科室 → 绩效核算单元 拉链维表收敛（锁定最新快照, 防范围膨胀） ──
