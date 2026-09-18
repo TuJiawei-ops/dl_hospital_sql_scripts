@@ -7,6 +7,7 @@
   模板占位符: '{year}' / '{month}' / '{start_time}' / '{end_time}' / {struct_codes}
 
   修改日志：
+  2026-09-18 11:20:00 | 唯一约束纠偏 | 根治 UQ_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_BIZ 唯一键冲突：WHERE 追加 f.[来源] = N'门诊' 门诊来源硬隔离（独占一行，保障 -- 单行零副作用隔离）；final CTE 剥离 [来源] / [项目大类] 投影列与 GROUP BY 分组维度，消除同一 核算单元 × 项目 × 执行人员 × 日期类型 粒度下因来源/项目大类差异产生的重复行（唯一键 8 维无 [来源]/[项目大类]，属粒度伪维度）。计算链路（积分 = 项目点数 × 汇总数量 × 学科系数 × 绩效核算系数）、第一区块 INSERT 落库投影、JSON 序列化链路与第二区块读取逻辑零改动。
   2026-09-18 10:00:00 | 维度解耦 | cte_rvu 解构伪聚合：剥离 GROUP BY v0.[PROJ_CODE] 与 MAX() 聚合函数，遵循零版本寻址与 VERSION_NO 备注化法则，维表直拉 1:1 字段投影。VERSION_NO / VERSION_DESC 降级为普通属性列，严禁作为动态寻址主控条件。
   2026-09-17 18:30:00 | 聚合降维 | final CTE 剥离 [单价] 分组维度：GROUP BY 移除 CAST(f.[单价] AS DECIMAL(18,8))，消除因单价异动/退费记录（如正向 0.00 与退费 1.00 并存）导致的聚合粒度碎片化，从根因上规避 UQ_DWD_FIN_CALC_ALLOC1_DETAIL_LOG_BIZ 唯一约束冲突；SELECT 列表 [单价] 改由 SUM([金额]) ÷ SUM([数量]) 动态计算加权平均单价，并以 CASE WHEN SUM([数量]) = 0 THEN 0 实现零除保护，保障退费净额完全抵消场景不抛错。[数量] / [金额] 维持 SUM 聚合，正反向交易净额抵消口径成立；第一区块 INSERT 落库投影与 JSON 序列化链路零改动。
   2026-09-17 17:00:00 | 参数纠偏 | 落库日志表筛选解耦：DELETE 幂等清场与第二区块 CTE_DWD_READ_ALIAS 读取块的账期条件，由 YEAR(CAST('{start_time}' AS DATETIME)) / MONTH(...) 动态日期解析改为 '{year}' / '{month}' 显式参数直取（经 CAST(... AS INT) 与物理列类型对齐）；'{start_time}' / '{end_time}' 严格收敛至底层事实表 dbo.[PF临时医疗服务项目26A] 的 [缴费时间] 精确时间窗口筛选，严禁外溢至汇总日志表操作；头部模板占位符清单补录 '{year}' / '{month}'。计算链路、落库投影与占位符契约零改动。
@@ -87,10 +88,7 @@ cte_rvu AS (
 )
 ,final AS (
 SELECT
-    f.[来源]                                                  AS [来源]
-
-   ,f.[项目大类]                                              AS [项目大类]
-   ,f.[项目代码]                                              AS [项目代码]
+    f.[项目代码]                                              AS [项目代码]
    ,f.[项目名称]                                              AS [项目名称]
 
    ,v.[ITEM_CAT_CODE]                                         AS [绩效大类编码]
@@ -146,11 +144,10 @@ LEFT JOIN dbo.[DIM_WORK_CALENDAR] AS cal WITH (NOLOCK)
     ON CAST(f.[缴费时间] AS DATE) = cal.[CALC_DATE]
 WHERE f.[缴费时间] >= '{start_time}'
   AND f.[缴费时间] <= '{end_time}'
+  AND f.[来源] = N'门诊'
   AND f.[执行科室代码] = 36
 GROUP BY
-    f.[来源]
-   ,f.[项目大类]
-   ,f.[项目代码]
+    f.[项目代码]
    ,f.[项目名称]
    ,v.[ITEM_CAT_CODE]
    ,v.[ITEM_CAT_NAME]
