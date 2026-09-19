@@ -27,7 +27,7 @@
   查询提示: 全链路 WITH (NOLOCK)，只读核对不加锁，避免影响生产事实表写入。
 
   输出结构（双层出口设计）:
-  层 1/2  res CTE        : 全过程明细平铺网格（20 列，纯投影 + 精度对齐 + 审计文本拼接），
+  层 1/2  res CTE        : 全过程明细平铺网格（22 列，纯投影 + 精度对齐 + 审计文本拼接），
                            不含任何 WHERE / ORDER BY，计量口径与计算脚本落库粒度严格一致。
   层 2/2  最外层查询通道 : SELECT * FROM res WHERE 1=1 + ORDER BY，内置「个性化查询扩展插入位」
                            （注释态示例：按核算单元、项目代码、执行角色、积分阈值、大类筛选），
@@ -61,6 +61,19 @@
   {struct_codes}                : 核算单元过滤集，位于 cte_role_unpivot，默认注释态
 
   修改日志：
+  2026-09-19 06:00:00 | 字段扩展 | 原始 HIS 执行科室全链透传：cte_role_unpivot 新增透传 j.[EXEC_DEPT_ID] /
+                                j.[EXEC_DEPT_NAME] 并同步纳入 GROUP BY（HIS 科室成为增量粒度维度），
+                                final 对应投影 EXEC_DEPT_ID / EXEC_DEPT_NAME，res 层输出中文别名
+                                [原始HIS执行科室代码] / [原始HIS执行科室名称]，输出网格由 20 列扩展至 22 列；
+                                列位紧随 [核算月份] 之后、[绩效核算单元编码] 之前，形成
+                                「HIS 科室 ➔ 绩效核算单元」横向映射比对流向。最外层 WHERE 扩展位追加
+                                HIS 科室过滤示例两行。注: fact_raw 与 joined 自建表起即已携带这两列
+                                （并非本次解除剥离），本次仅补齐三段下游断链；三段式审计文本、
+                                DECIMAL(18,8) 精度、NOLOCK 提示、双层出口封装结构零损毁。
+                                粒度声明: 报表粒度由【单元 × 项目 × 角色】扩展为
+                                【HIS科室 × 单元 × 项目 × 角色】，同一核算单元若由多 HIS 科室映射而来将
+                                展开为多行（各 HIS 科室独立计量，血缘可回溯）；如需还原计算脚本的单元汇总态，
+                                按 [绩效核算单元编码] 二次 SUM 即可。
   2026-09-19 05:00:00 | 出口封装 | 最外层二次封装（Envelope Slot Pattern）：将原 `SELECT ... FROM final AS f` 平铺
                                 查询整体上收为 res CTE（层 1/2，纯投影零过滤），并在脚本末尾新增最外层查询
                                 通道 `SELECT * FROM res WHERE 1=1 + ORDER BY`（层 2/2），内置「个性化查询扩展
@@ -183,11 +196,17 @@ WITH dept_dict AS (
 )
 
 ,cte_role_unpivot AS (
-    -- ── Intermediate CTE: 角色展开与核算单元预聚合（按【单元 × 项目 × 角色】收敛，消除 HIS 科室差异） ──
-    -- 相较计算脚本的增量：同步携带 u.[EXEC_RATIO] 原始分摊比例（EXEC_RATIO_SRC），
-    -- 使「分摊比例 → 加权积分 → 反推综合比例」三态可在同一行内交叉验证。
+    -- ── Intermediate CTE: 角色展开与核算单元预聚合（按【HIS科室 × 单元 × 项目 × 角色】收敛） ──
+    -- 相较计算脚本的增量（2 处）：
+    --   ① 透传 j.[EXEC_DEPT_ID] / j.[EXEC_DEPT_NAME] 原始 HIS 执行科室，暴露 HIS ➔ 绩效单元映射血缘；
+    --   ② 同步携带 u.[EXEC_RATIO] 原始分摊比例（EXEC_RATIO_SRC），
+    --      使「分摊比例 → 加权积分 → 反推综合比例」三态可在同一行内交叉验证。
+    -- 注: 因 ① 引入新粒度维度，同一绩效核算单元若由多 HIS 科室映射而来将展开为多行（各 HIS 科室独立计量），
+    --     这是本报表「血缘可回溯」的设计意图；如需还原计算脚本的单元汇总态，按 UNIT_CODE 二次 SUM 即可。
     SELECT
-        u.[HPS_DEPT_CODE]                                                              AS HPS_DEPT_CODE
+        j.[EXEC_DEPT_ID]                                                                AS EXEC_DEPT_ID
+       ,j.[EXEC_DEPT_NAME]                                                              AS EXEC_DEPT_NAME
+       ,u.[HPS_DEPT_CODE]                                                              AS HPS_DEPT_CODE
        ,u.[HPS_DEPT_NAME]                                                              AS HPS_DEPT_NAME
        ,j.[PROJ_CODE]                                                                  AS PROJ_CODE
        ,j.[PROJ_NAME]                                                                  AS PROJ_NAME
@@ -216,7 +235,9 @@ WITH dept_dict AS (
       AND u.[EXEC_RATIO] > CAST(0.00000000 AS DECIMAL(18,8))
       AND u.[HPS_DEPT_CODE] IS NOT NULL
     GROUP BY
-         u.[HPS_DEPT_CODE]
+         j.[EXEC_DEPT_ID]
+        ,j.[EXEC_DEPT_NAME]
+        ,u.[HPS_DEPT_CODE]
         ,u.[HPS_DEPT_NAME]
         ,j.[PROJ_CODE]
         ,j.[PROJ_NAME]
@@ -235,6 +256,8 @@ WITH dept_dict AS (
     SELECT
         CAST('{year}'  AS VARCHAR(10))                                                                     AS CALC_YEAR
        ,CAST('{month}' AS VARCHAR(10))                                                                     AS CALC_MONTH
+       ,r.[EXEC_DEPT_ID]                                                                                   AS EXEC_DEPT_ID
+       ,r.[EXEC_DEPT_NAME]                                                                                 AS EXEC_DEPT_NAME
        ,r.[HPS_DEPT_CODE]                                                                                  AS UNIT_CODE
        ,r.[HPS_DEPT_NAME]                                                                                  AS UNIT_NAME
        ,r.[PROJ_CODE]                                                                                      AS PROJ_CODE
@@ -265,6 +288,8 @@ WITH dept_dict AS (
 SELECT
     f.[CALC_YEAR]                                                                AS [核算年份]
    ,f.[CALC_MONTH]                                                               AS [核算月份]
+   ,f.[EXEC_DEPT_ID]                                                             AS [原始HIS执行科室代码]
+   ,f.[EXEC_DEPT_NAME]                                                           AS [原始HIS执行科室名称]
    ,f.[UNIT_CODE]                                                                AS [绩效核算单元编码]
    ,f.[UNIT_NAME]                                                                AS [绩效核算单元名称]
    ,f.[PROJ_CODE]                                                                AS [收费项目代码]
@@ -302,6 +327,8 @@ SELECT
 FROM res
 WHERE 1=1
   -- ── 个性化查询扩展插入位（示例，按需取消注释） ──
+  -- AND [原始HIS执行科室代码] = 100001
+  -- AND [原始HIS执行科室名称] LIKE N'%门诊%'
   -- AND [绩效核算单元编码] = '100001'
   -- AND [绩效核算单元名称] LIKE N'%皮肤%'
   -- AND [收费项目代码] = '250403014'
