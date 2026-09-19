@@ -12,7 +12,7 @@
 
   ── 依赖契约 ──
   事实表 : dbo.[PF临时医疗服务项目26A]
-           [项目代码] NVARCHAR(60) / [开单科室代码] BIGINT / [开单时间] DATETIME
+           [项目代码] NVARCHAR(60) / [开单科室代码] BIGINT / [执行时间] DATETIME
            [数量] DECIMAL(18,8)
   桥接表 : dbo.[sjjk_bmb_2025_06_01]（部门字典表）
            [id] bigint 主键聚簇 / [编码] nvarchar(10) —— 事实层数值主键 → HIS 业务编码的唯一桥接通道
@@ -35,7 +35,7 @@
 
   修改日志：
   2026-09-18 14:00:00 | 逻辑纠偏 | 彻底剥离 dept_unit_mapping 的 VERSION_RANK 开窗去重逻辑，恢复 sjjk_DEPT_UNIT_MAPPING_2025_11_27 物理映射表的原始颗粒度与预期笛卡尔积。
-  2026-09-18 10:30:00 | 时间维度重构 | 动态路由门诊/缴费时间与非门诊/开单时间，筛选范围切换为 '{start_time}' 与 '{end_time}' 标准占位符；规范占位符独占行与 AND 开头法则。
+  2026-09-18 10:30:00 | 时间维度重构 | 动态路由门诊/缴费时间与非门诊/执行时间，筛选范围切换为 '{start_time}' 与 '{end_time}' 标准占位符；规范占位符独占行与 AND 开头法则。
   2026-09-18 13:00:00 | 字段微调 | 第一区块持久化 INSERT/SELECT 补齐 [RVU_VAL] 物理列投影，与 DWD_FIN_CALC_ALLOC1_DETAIL_LOG 新增属性列 1:1 对齐（投影源 = final 层已携带的 [RVU_VAL] 单项绩效点数，经 CAST(... AS DECIMAL(18,8)) 收敛至全局强制精度；INSERT 列位插入于 [ITEM_CAT_NAME] 之后；本脚本无角色维度故不存在 [EXEC_ROLE] 列）。
   2026-09-14 17:00:00 | JSON 过程仓扩展与审计文本瘦身 | dim_version_scope 由 6 列升级为全字段 1:1 直连（[ID] 别名 RVU_ID 防主键碰撞），CALC_DETAIL_JSON 追加单层嵌套 [RVU配置快照] 节点（23 节点，经 JSON_QUERY + FOR JSON PATH 子查询按 PROJ_CODE 回表生成，与姊妹脚本 医疗服务项目执行积分.sql 契约同构）；剔除 CALC_PROCESS_TEXT 末段 "+ 0 = 积分" 恒等零加增熵尾缀，末段直接收敛至最终开单积分。核心算式 DECISION_SCORE 与聚合逻辑零改动。
   2026-09-14 16:30:00 | 键匹配精简 | 移除 bmb_bridge / fact_raw 中 HIS_DEPT_CODE 的 RIGHT 补零与 RTRIM/LTRIM 格式化拼接，改为字典层 [编码] 原值直连匹配；头部纠偏收敛为 3 条核心架构决策。
@@ -43,7 +43,7 @@
   2026-09-12 22:50:00 | 字段扩展 | 追加 TOTAL_QTY 物理列映射（CAST(f.[TOTAL_QTY] AS DECIMAL(18,8))）至 DWD_FIN_CALC_ALLOC1_DETAIL_LOG，将工作量/工分一等公民化（BI 可直接 SUM 对账，免解析 JSON）；CALC_DETAIL_JSON 由 9 节点扩展为 13 节点全量过程仓，补齐 核算年份/核算月份/核算单元编码/核算单元名称 及 计算过程描述（账期与单元编码因 agg 层为文本形态，按源列声明宽度 CAST AS VARCHAR(10) 序列化，与物理 INT 列语义同源）；其余计算 CTE 与双区块 Envelope 结构零改动。
   2026-09-12 22:30:00 | 架构持久化 | Envelope Pattern 双区块重构：第一区块前置幂等 DELETE（按 CALC_YEAR/CALC_MONTH/ITEM_CODE/UNIT_CODE 清理，清场范围 ⊇ UQ 前缀 (CALC_YEAR,CALC_MONTH,ITEM_CODE,UNIT_CODE,PROJ_CODE) 故语义安全），计算收敛后 INSERT 落至一次分配专用物理表 DWD_FIN_CALC_ALLOC1_DETAIL_LOG（ITEM_CODE='ITEM_MED_SVC_ORDER_SCORE' / FINAL_VALUE_TYPE='SCORE'），显式下沉 PROJ_CODE/PROJ_NAME/ITEM_CAT_CODE/ITEM_CAT_NAME 命脉列，过程因子（单项RVU/决策系数/汇总数量）经 FOR JSON PATH 收敛入 CALC_DETAIL_JSON；第二区块以 波浪号 隔离，从物理表读取生成 CTE_DWD_READ_ALIAS 并严格承接 struct_code/struct_name/result_value 模板契约（末尾补分号闭合）。原 fact_raw → final 全部计算 CTE 零改动。
   2026-09-12 21:10:00 | 架构瘦身 | 链路剪枝：彻底剥离原始开单科室字段（DEPT_CODE/DEPT_NAME）及中间映射快照 JSON（MAPPING_SNAPSHOT），原始科室降级为纯"渡河之桥"仅用于匹配映射表；聚合粒度锁死为【核算单元编码 × 核算单元名称 × 项目代码】；移除 agg 层 O(N²) 冗余自连接，重构为"明细计算 → 维度系数收敛 → 目标粒度汇总"三段解耦，消除行级放大与嵌套子查询卡顿；新增 UNKNOWN/未映射 兜底标记。
-  2026-09-12 18:30:00 | 维度扩展 | 引入 sjjk_DEPT_UNIT_MAPPING_2025_11_27 拉链映射表（限定 PERFORM_PERSON_TYPE_CODE='1001' 且基于开单时间半开区间匹配），扩展绩效核算单元编码、名称及映射行快照 JSON；纠偏关联键编码口径（事实层数值补零归一至维表旧版字符编码），纠偏同键重复行导致的行级膨胀。
+  2026-09-12 18:30:00 | 维度扩展 | 引入 sjjk_DEPT_UNIT_MAPPING_2025_11_27 拉链映射表（限定 PERFORM_PERSON_TYPE_CODE='1001' 且基于执行时间半开区间匹配），扩展绩效核算单元编码、名称及映射行快照 JSON；纠偏关联键编码口径（事实层数值补零归一至维表旧版字符编码），纠偏同键重复行导致的行级膨胀。
   2026-09-12 18:00:00 | 字段扩展 | 新增核算年份与月份字段；新增符合四段式规范的计算过程描述字段；最外层别名统一转换为中文。
   2026-09-12 17:30:00 | 占位符重构 | 重构占位符为 '{year}'/'{month}'，移除 {version_no} 参数，锁定最新版本快照
   2026-09-12 00:00:00 | 脚本新建 | 依据事实层与维表层 DDL 契约创建医疗服务项目开单积分汇总脚本；
@@ -100,7 +100,7 @@ fact_raw AS (
         a.[开单科室]                                   AS DEPT_NAME,
         -- HIS 科室编码：字典层原值直连，作为拉链维表关联键
         b.[HIS_DEPT_CODE],
-        a.[开单时间]                                   AS ORDER_TIME,
+        a.[执行时间]                                   AS ORDER_TIME,
         CAST(a.[数量]  AS DECIMAL(18,8))               AS QTY,
         CAST(a.[单价]  AS DECIMAL(18,8))               AS UNIT_PRICE,
         CAST(a.[金额]  AS DECIMAL(18,8))               AS AMOUNT
@@ -110,7 +110,7 @@ fact_raw AS (
     WHERE 1=1
       AND (
           (a.[来源] = N'门诊' AND a.[缴费时间] >= CAST('{start_time}' AS DATETIME) AND a.[缴费时间] <= CAST('{end_time}' AS DATETIME))
-          OR (ISNULL(a.[来源], '') <> N'门诊' AND a.[开单时间] >= CAST('{start_time}' AS DATETIME) AND a.[开单时间] <= CAST('{end_time}' AS DATETIME))
+          OR (ISNULL(a.[来源], '') <> N'门诊' AND a.[执行时间] >= CAST('{start_time}' AS DATETIME) AND a.[执行时间] <= CAST('{end_time}' AS DATETIME))
       )
 ),
 
