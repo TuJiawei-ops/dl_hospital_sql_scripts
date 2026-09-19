@@ -3,7 +3,7 @@
   脚本名称: 医疗服务项目开单积分.sql
   业务说明: 医疗服务项目开单决策积分汇总（按 核算单元 × 项目 粒度）
             积分 = SUM(数量) × RVU_VAL(单项绩效点数) × DECISION_COFF(诊疗决策系数)
-            剔除绩效大类: 1101(出入院服务类)、1041(诊察类)
+            剔除绩效大类: 1101(出入院服务类)、1043(门诊诊察类)
   数据流向: dbo.[PF临时医疗服务项目26A] (事实层)
             ──▶ dbo.[sjjk_bmb_2025_06_01] (字典桥接 开单科室代码 id -> 编码)
             ──▶ dbo.[sjjk_DEPT_UNIT_MAPPING_2025_11_27] (HIS 编码 -> 绩效核算单元)
@@ -34,6 +34,7 @@
      JSON 过程仓追加单层嵌套 [RVU配置快照] 节点，留存维度行完整血缘（版本/机构/计费单位/审计人等）。
 
   修改日志：
+  2026-09-19 17:20:00 | 剔除条件变更 | dim_version_scope CTE 绩效大类剔除集合由 ('1101', '1041') 变更为 ('1101', '1043')，头部业务说明同步更新为「剔除绩效大类: 1101(出入院服务类)、1043(门诊诊察类)」；生效范围：仅第 161 行 WHERE 过滤条件与第 6 行头部说明文本，CTE 列投影、下游 joined/final、JSON 快照、Envelope 双区块与全部占位符逻辑零改动。
   2026-09-18 14:00:00 | 逻辑纠偏 | 彻底剥离 dept_unit_mapping 的 VERSION_RANK 开窗去重逻辑，恢复 sjjk_DEPT_UNIT_MAPPING_2025_11_27 物理映射表的原始颗粒度与预期笛卡尔积。
   2026-09-18 10:30:00 | 时间维度重构 | 动态路由门诊/缴费时间与非门诊/执行时间，筛选范围切换为 '{start_time}' 与 '{end_time}' 标准占位符；规范占位符独占行与 AND 开头法则。
   2026-09-18 13:00:00 | 字段微调 | 第一区块持久化 INSERT/SELECT 补齐 [RVU_VAL] 物理列投影，与 DWD_FIN_CALC_ALLOC1_DETAIL_LOG 新增属性列 1:1 对齐（投影源 = final 层已携带的 [RVU_VAL] 单项绩效点数，经 CAST(... AS DECIMAL(18,8)) 收敛至全局强制精度；INSERT 列位插入于 [ITEM_CAT_NAME] 之后；本脚本无角色维度故不存在 [EXEC_ROLE] 列）。
@@ -158,7 +159,7 @@ dim_version_scope AS (
         b.[REMARK],
         b.[SCORE_REASON]
     FROM dbo.[DIM_PRF_ITEM_RVU_VERSION] AS b WITH (NOLOCK)
-    WHERE b.[ITEM_CAT_CODE] NOT IN ('1101', '1041')
+    WHERE b.[ITEM_CAT_CODE] NOT IN ('1101', '1043')
       AND b.[PROJ_CODE] IS NOT NULL
 ),
 
