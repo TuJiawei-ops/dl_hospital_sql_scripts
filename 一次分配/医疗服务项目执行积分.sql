@@ -194,7 +194,8 @@ cte_role_unpivot AS (
             ('技师', j.[TECH_EXEC_RATIO],  j.[TECH_HPS_DEPT_CODE],  j.[TECH_HPS_DEPT_NAME]),
             ('护士', j.[NURSE_EXEC_RATIO], j.[NURSE_HPS_DEPT_CODE], j.[NURSE_HPS_DEPT_NAME])
     ) AS u([ROLE_NAME], [EXEC_RATIO], [HPS_DEPT_CODE], [HPS_DEPT_NAME])
-    WHERE u.[HPS_DEPT_CODE] IN {struct_codes}
+    WHERE 1 =1
+      AND u.[HPS_DEPT_CODE] IN {struct_codes}
       AND u.[EXEC_RATIO] > CAST(0.00000000 AS DECIMAL(18,8))
       AND u.[HPS_DEPT_CODE] IS NOT NULL
     GROUP BY
