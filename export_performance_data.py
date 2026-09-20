@@ -17,7 +17,7 @@
    任务 2  核算单元                          -> dbo.T_DEPARTMENT                      (32 列, 按 DDL 声明序对齐)
    任务 3  科室与核算单元映射表               -> dbo.sjjk_DEPT_UNIT_MAPPING_2025_11_27  (11 列)
    任务 4  医院收费项目绩效点数版本维表        -> dbo.DIM_PRF_ITEM_RVU_VERSION            (23 列)
-   任务 5  各科室收费项目医技护执行划分维表     -> dbo.DIM_DEPT_ITEM_EXEC_RATIO            (23 列)
+   任务 5  各科室收费项目医技护执行划分维表     -> dbo.DIM_DEPT_ITEM_EXEC_RATIO            (26 列)
    任务 6  核算单元月度岗位系数与在岗状态明细表 -> dbo.ads_dept_post_coefficient_m          (16 列)
    任务 7  绩效核算日历维度表                 -> dbo.DIM_WORK_CALENDAR                   (11 列, 实体源自 20260915_create_dim_work_calendar.sql)
 
@@ -209,12 +209,15 @@ EXEC_RATIO_COLS: Dict[str, str] = {
     "DOC_EXEC_RATIO": "医生执行比例",
     "TECH_EXEC_RATIO": "技师执行比例",
     "NURSE_EXEC_RATIO": "护士执行比例",
+    "CLINICAL_EXEC_RATIO": "临床执行比例",
     "DOC_HPS_DEPT_CODE": "医生对应核算单元编码",
     "DOC_HPS_DEPT_NAME": "医生对应核算单元名称",
     "TECH_HPS_DEPT_CODE": "技师对应核算单元编码",
     "TECH_HPS_DEPT_NAME": "技师对应核算单元名称",
     "NURSE_HPS_DEPT_CODE": "护士对应核算单元编码",
     "NURSE_HPS_DEPT_NAME": "护士对应核算单元名称",
+    "CLINICAL_HPS_DEPT_CODE": "临床对应核算单元编码",
+    "CLINICAL_HPS_DEPT_NAME": "临床对应核算单元名称",
     "PROVIDE_DATE": "提供日期",
     "ITEM_ADD_DATE": "项目新增日期",
     "DISABLE_DATE": "停用日期",
