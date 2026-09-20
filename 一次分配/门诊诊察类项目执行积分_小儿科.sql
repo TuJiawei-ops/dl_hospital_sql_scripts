@@ -3,12 +3,13 @@
   脚本名称: 门诊诊察类项目执行积分_小儿科.sql
   业务说明: 门诊诊察类项目（1043）执行积分持久化（核算单元 × 执行人员 × 项目 × 日期类型 粒度），
             执行科室代码 36 硬隔离；学科系数常量 1.1。
-  积分口径: 积分 = 项目点数 × 汇总数量 × 学科系数(1.1) × 绩效核算系数
+  积分口径: 积分 = 项目点数 × 汇总数量 × 执行系数 × 学科系数(1.1) × 绩效核算系数
   模板占位符: '{year}' / '{month}' / '{start_time}' / '{end_time}' / {struct_codes}
   参数作用域: '{year}' / '{month}' 仅作用于落库日志表 [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] 的账期幂等清场与第二区块读取；
              '{start_time}' / '{end_time}' 严格收敛至底层事实表 [dbo].[PF临时医疗服务项目26A] 的 [执行时间] 精确时间窗口筛选。
 
   修改日志：
+  2026-09-20 13:40:00 | 算法规则变更 | 门诊诊察类执行积分引入 DIM_PRF_ITEM_RVU_VERSION.EXEC_COFF（执行系数）乘法因子，积分口径由「项目点数 × 汇总数量 × 学科系数(1.1) × 绩效核算系数」重构为「项目点数 × 汇总数量 × 执行系数 × 学科系数(1.1) × 绩效核算系数」。具体落点：头部「积分口径」同步更正；final CTE [积分] 列表达式于 SUM(数量) 与学科系数之间插入 ISNULL(CAST(v.[EXEC_COFF] AS DECIMAL(18,8)), CAST(1.00000000 AS DECIMAL(18,8))) 乘项（NULL 兜底 1.0 防止空值经乘法传播导致整行积分归零）；final CTE [积分计算过程] 于「汇总数量」与「学科系数(1.1)」文本乘项之间插入 执行系数 文本项（CAST(... AS VARCHAR(32)) 与既有文本项宽度对齐）；第一区块 CALC_PROCESS_TEXT 公式说明前缀与 CALC_DETAIL_JSON 内 [计算过程描述] 公式说明前缀同步更新为「项目点数 × 汇总数量 × 执行系数 × 学科系数 × 绩效核算系数」。GROUP BY 维度结构（v.[EXEC_COFF] 分组基准）、时间窗口索引优化（f.[执行时间] 无函数包裹）、人员黑名单 BIGINT 字面量过滤（123/2523/2343）、f.[来源] = N'门诊' 硬隔离、执行科室代码 = 36 隔离、落库 INSERT 列清单、[执行系数] JSON 节点投影与第二区块接口读取逻辑零改动。
   2026-09-20 10:20:00 | 字段格式化 | 第二区块 CTE_DWD_READ_ALIAS 中 [CREATE_TIME] 字段补齐 CONVERT(VARCHAR(19), ..., 120) 显式文本化转换，确保接口读取格式统一。
   2026-09-18 15:00:00 | 时间维度变更 | 将核心维度 [接诊时间] 重构替换为 [执行时间]。具体落点：final CTE 派生列 [接诊日期年份]/[接诊日期月份] 更名为 [执行日期年份]/[执行日期月份]（YEAR/MONTH 取值源切至 f.[执行时间]）；LEFT JOIN cte_staff_post 的年份/月份关联条件切至 f.[执行时间]；LEFT JOIN dbo.[DIM_WORK_CALENDAR] 的 CAST(... AS DATE) 关联条件切至 f.[执行时间]；WHERE 时间窗口过滤切至 f.[执行时间]（精准字段比较，无函数包裹，SARGability 完整保留）；GROUP BY 时间分组字段切至 f.[执行时间]；第一区块 INSERT 的 [CALC_YEAR]/[CALC_MONTH] 投影源与 JSON 序列化 [核算年份]/[核算月份] 映射源同步更正为执行日期年份/月份列。计算口径（积分 = 项目点数 × 汇总数量 × 学科系数 × 绩效核算系数）、聚合粒度、INSERT 列清单、第二区块读取逻辑与模板占位符契约零改动。
   2026-09-18 14:00:00 | 参数说明纠偏 | 头部补录「参数作用域」注释块：'{start_time}' / '{end_time}' 的语义载体已随本次时间维度变更由 [缴费时间] 迁移至 [接诊时间]，明确其仅作用于事实表 [接诊时间] 精确时间窗口筛选，严禁外溢至落库日志表操作；同时显式声明 '{year}' / '{month}' 的账期清场与读取作用域。历史日志（2026-09-17 17:00:00 条目）为不可篡改履历，其中 [缴费时间] 表述保留原貌，不再回溯改写。
@@ -129,12 +130,16 @@ SELECT
    ,YEAR(f.[执行时间])                                        AS [执行日期年份]
    ,MONTH(f.[执行时间])                                       AS [执行日期月份]
 
-   ,CAST(v.[RVU_VAL] * SUM(CAST(f.[数量] AS DECIMAL(18,8))) * CAST(1.1 AS DECIMAL(18,8)) * ISNULL(CAST(cal.[PERF_COEFF] AS DECIMAL(18,8)), CAST(1.00000000 AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS [积分]
+   ,CAST(v.[RVU_VAL] * SUM(CAST(f.[数量] AS DECIMAL(18,8))) * ISNULL(CAST(v.[EXEC_COFF] AS DECIMAL(18,8)), CAST(1.00000000 AS DECIMAL(18,8))) * CAST(1.1 AS DECIMAL(18,8)) * ISNULL(CAST(cal.[PERF_COEFF] AS DECIMAL(18,8)), CAST(1.00000000 AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS [积分]
    ,CONCAT(
         CAST(CAST(v.[RVU_VAL] AS DECIMAL(18,8)) AS VARCHAR(32))
        ,' × '
        ,CAST(CAST(SUM(CAST(f.[数量] AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS VARCHAR(32))
-       ,' × 1.10000000 × '
+       ,' × '
+       ,CAST(ISNULL(CAST(v.[EXEC_COFF] AS DECIMAL(18,8)), CAST(1.00000000 AS DECIMAL(18,8))) AS VARCHAR(32))
+       ,' × '
+       ,CAST(CAST(1.1 AS DECIMAL(18,8)) AS VARCHAR(32))
+       ,' × '
        ,CAST(ISNULL(CAST(cal.[PERF_COEFF] AS DECIMAL(18,8)), CAST(1.00000000 AS DECIMAL(18,8))) AS VARCHAR(32))
     )                                                         AS [积分计算过程]
 FROM dbo.[PF临时医疗服务项目26A] AS f WITH (NOLOCK)
@@ -202,7 +207,7 @@ SELECT
     CAST(f.[积分] AS DECIMAL(18,8))                     AS [FINAL_VALUE],
     CAST(f.[数量] AS DECIMAL(18,8))                     AS [TOTAL_QTY],
     CONCAT(
-        N'门诊诊察类项目执行积分_小儿科 | 门诊诊察类执行积分 = 项目点数 × 汇总数量 × 学科系数 × 绩效核算系数 | '
+        N'门诊诊察类项目执行积分_小儿科 | 门诊诊察类执行积分 = 项目点数 × 汇总数量 × 执行系数 × 学科系数 × 绩效核算系数 | '
        ,f.[积分计算过程]
        ,' = '
        ,CAST(CAST(f.[积分] AS DECIMAL(18,8)) AS VARCHAR(50))
@@ -229,7 +234,7 @@ SELECT
             CAST(f.[积分] AS DECIMAL(18,8))                        AS [最终结果],
             CAST(f.[数量] AS DECIMAL(18,8))                        AS [汇总数量],
             CONCAT(
-                N'门诊诊察类项目执行积分_小儿科 | 门诊诊察类执行积分 = 项目点数 × 汇总数量 × 学科系数 × 绩效核算系数 | '
+                N'门诊诊察类项目执行积分_小儿科 | 门诊诊察类执行积分 = 项目点数 × 汇总数量 × 执行系数 × 学科系数 × 绩效核算系数 | '
                ,f.[积分计算过程]
                ,' = '
                ,CAST(CAST(f.[积分] AS DECIMAL(18,8)) AS VARCHAR(50))
