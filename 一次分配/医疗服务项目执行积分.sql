@@ -33,6 +33,7 @@
   {struct_codes}: 核算单元过滤集 (如 ('10001', '10002'))
 
   修改日志：
+  2026-09-20 10:20:00 | 字段格式化 | 第二区块 CTE_DWD_READ_ALIAS 中 [CREATE_TIME] 字段补齐 CONVERT(VARCHAR(19), ..., 120) 显式文本化转换，确保接口读取格式统一（ISO 8601 yyyy-mm-dd hh:mi:ss）；生效范围：仅第 344 行读取块投影表达式，第一区块落库物理列 SYSDATETIME() 原生 DATETIME2、CTE 列投影、JSON 快照、占位符与 ~ 分隔符零改动。
   2026-09-19 17:20:00 | 剔除条件变更 | dim_version_scope CTE 绩效大类剔除集合由 ('1101', '1041') 变更为 ('1101', '1043')，头部业务说明同步更新为「剔除绩效大类 1101(出入院服务类)、1043(门诊诊察类)」；生效范围：仅第 122 行 WHERE 过滤条件与第 5 行头部说明文本，CTE 列投影、下游 joined/cte_role_unpivot/final、JSON 快照、Envelope 双区块与全部占位符逻辑零改动。
   2026-09-18 10:30:00 | 时间维度重构 | 动态路由门诊/缴费时间与非门诊/执行时间，筛选范围切换为 '{start_time}' 与 '{end_time}' 标准占位符。fact_raw 事实层过滤由固定 [执行时间] 月度半开区间（DATEFROMPARTS(年,月,1) 至次月1日）重构为按 [来源] 动态分流：门诊来源走 [缴费时间] 闭区间，非门诊来源走 [执行时间] 闭区间，两分支均显式 CAST(... AS DATETIME) 避免隐式转换衰减性能，闭区间采用 >= 与 <= 保证 SARGability；WHERE 恒真锚点 1=1 与动态分支独占一行、行首 AND 前缀，保障 -- 单行零副作用隔离。'{year}' / '{month}' 占位符予以保留，其作用域收敛至落库日志表账期幂等清场、BIZ_EPOCH 账期右端点哨兵（契约 §8）及 final 出口账期契约，与事实层时间窗口筛选完全正交，严禁在本次变更中一并移除（否则 BIZ_EPOCH 派生链崩溃）。下游 CTE 链条（dept_dict / dim_version_scope / dim_exec_ratio_raw / joined / cte_role_unpivot / final）、幂等清场、INSERT 落库投影与第二区块读取逻辑零改动。风险登记：若源端存在 [来源]='住院' 且 [执行时间] IS NULL（或 [来源]='门诊' 且 [缴费时间] IS NULL）的记录，两分支均不命中将被静默过滤，需业务侧确认源表完整性；[来源] 物理列可空，非门诊分支已通过 ISNULL(a.[来源], '') 兜底 NULL 语义，防止三值逻辑 UNKNOWN 导致漏数。
   2026-09-18 13:00:00 | 字段微调 | 第一区块持久化 INSERT/SELECT 补齐 [RVU_VAL] 物理列投影，与 DWD_FIN_CALC_ALLOC1_DETAIL_LOG 新增属性列 1:1 对齐（投影源 = final 层已携带的 [RVU_VAL] 单项绩效点数，经 CAST(... AS DECIMAL(18,8)) 收敛至全局强制精度；INSERT 列位插入于 [ITEM_CAT_NAME] 之后、[EXEC_ROLE] 之前）。
@@ -341,7 +342,7 @@ WITH CTE_DWD_READ_ALIAS AS (
         [TOTAL_QTY]             AS [汇总数量],
         [CALC_PROCESS_TEXT]     AS [计算过程描述],
         [CALC_DETAIL_JSON]      AS [明细JSON],
-        [CREATE_TIME]           AS [创建时间]
+        CONVERT(VARCHAR(19), [CREATE_TIME], 120) AS [创建时间]
     FROM [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]
     WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
       AND [CALC_MONTH] = CAST('{month}' AS INT)
