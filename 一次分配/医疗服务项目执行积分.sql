@@ -13,13 +13,12 @@
   事实表 : dbo.[PF临时医疗服务项目26A] ([项目代码] NVARCHAR(60) / [数量] [金额] DECIMAL(18,8))
   桥接表 : dbo.[sjjk_bmb_2025_06_01] ([id] BIGINT -> [编码] NVARCHAR(10)，桥接输出 VARCHAR(60))
   维表 A : dbo.[DIM_PRF_ITEM_RVU_VERSION] (全字段直连，[ID] 别名 RVU_ID 规避 ID 碰撞)
-  维表 B : dbo.[DIM_DEPT_ITEM_EXEC_RATIO] (生效态 IS_ENABLED = 1)
-
+  维表 B : dbo.[DIM_DEPT_ITEM_EXEC_RATIO] (生效态 IS_ENABLED = 1，医技护临四角色并列映射)
   ── 核心架构与约束规范（极简版） ──
   1. 【血缘桥接】：事实层 [执行科室代码](BIGINT id) 必须经字典表映射为业务 [编码] 后，方可与维表 B 关联。
   2. 【全字段直连】：维表 A 全字段 1:1 直连，前提为当前账期内为【单版本单计费单位】，严禁在脚本内写 ROW_NUMBER() / MAX() 隐式寻址。
   3. 【预聚合剪枝】：事实层在 fact_raw 先按 (执行科室 × 项目) GROUP BY 压降行数，移除开单科室、单价及执行时间。
-  4. 【角色行转列】：cte_role_unpivot 层通过 CROSS APPLY 将医技护展开，强制过滤 u.[EXEC_RATIO] > 0 且核算单元不为空。
+  4. 【角色行转列】：cte_role_unpivot 层通过 CROSS APPLY 将医技护临四角色展开，强制过滤 u.[EXEC_RATIO] > 0 且核算单元不为空。
   5. 【键冲突解决】：多 HIS 执行科室可映射至同一绩效核算单元，必须在 cte_role_unpivot 按【单元 × 项目 × 角色】预聚合。
   6. 【反推综合比例】：final 层统一通过 [总执行积分] ÷ ([总数量] × [点数]) 反推加权比例，全链 DECIMAL(18,8) 同精度。
   7. 【JSON 性能红线】：CALC_DETAIL_JSON 采用单层扁平标量 + 索引命中的 RVU 嵌套快照，严格限制为 O(N) 内存拼接，禁止外部表回表。
@@ -33,6 +32,7 @@
   {struct_codes}: 核算单元过滤集 (如 ('10001', '10002'))
 
   修改日志：
+  2026-09-20 15:10:00 | 角色扩展 | 医技护解包逻辑追加第四类【临床】核算单元角色映射，与 sqlserver/DIM_DEPT_ITEM_EXEC_RATIO.sql 新增的 CLINICAL_EXEC_RATIO / CLINICAL_HPS_DEPT_CODE / CLINICAL_HPS_DEPT_NAME 三列完成消费链路对接。具体落点：dim_exec_ratio_raw 追加 r.[CLINICAL_EXEC_RATIO] / r.[CLINICAL_HPS_DEPT_CODE] / r.[CLINICAL_HPS_DEPT_NAME] 三列投影；joined 追加 ISNULL(x.[CLINICAL_EXEC_RATIO], CAST(0.00000000 AS DECIMAL(18,8))) AS CLINICAL_EXEC_RATIO 与 x.[CLINICAL_HPS_DEPT_CODE] / x.[CLINICAL_HPS_DEPT_NAME] 投影（NULL 兜底 0 与既有医技护三路口径完全一致）；cte_role_unpivot 的 CROSS APPLY (VALUES ...) 数组末尾追加 ('临床', j.[CLINICAL_EXEC_RATIO], j.[CLINICAL_HPS_DEPT_CODE], j.[CLINICAL_HPS_DEPT_NAME]) 行项，VALUES 四列间距对齐重排。上游过滤（IS_ENABLED = 1 / 绩效大类剔除 / 时间窗口）、积分公式（数量 × RVU × 执行系数 × 执行比例）、GROUP BY 结构、下游 final CTE、JSON 快照、Envelope 双区块与全部占位符零改动。既有过滤链 u.[EXEC_RATIO] > 0 AND u.[HPS_DEPT_CODE] IS NOT NULL 天然覆盖临床行项：未配置临床规则时 EXEC_RATIO 兜底 0 被短路剔除，零副作用。
   2026-09-20 12:20:00 | 算法规则变更 | 医疗服务项目执行积分逻辑追加 DIM_PRF_ITEM_RVU_VERSION.EXEC_COFF（执行系数）乘积项，同步更新 cte_role_unpivot 积分汇总公式、final 综合执行比例反推逻辑、三段式审计文本 CALC_PROCESS_TEXT 及 JSON 快照。生效范围：joined 追加 ISNULL(EXEC_COFF, 1.00000000) 投影；cte_role_unpivot 增列 j.[EXEC_COFF] 并同步 GROUP BY、TOTAL_EXEC_POINTS 由「数量 × RVU × 执行比例」升级为「数量 × RVU × 执行系数 × 执行比例」；final 透传 EXEC_COFF、EXEC_RATIO 反推分母追加 r.[EXEC_COFF]、审计文本中文逻辑公式段与数学代入段同步补乘执行系数；CALC_DETAIL_JSON 扁平节点在 [单项RVU点数] 下方追加 CAST(f.[EXEC_COFF] AS DECIMAL(18,8)) AS [执行系数]。落库物理列、DWD_FIN_CALC_ALLOC1_DETAIL_LOG 表结构、RVU 嵌套快照、第二区块接口读取块与全部模板占位符（{year}/{month}/{start_time}/{end_time}/{struct_codes}）零改动。
   2026-09-20 10:20:00 | 字段格式化 | 第二区块 CTE_DWD_READ_ALIAS 中 [CREATE_TIME] 字段补齐 CONVERT(VARCHAR(19), ..., 120) 显式文本化转换，确保接口读取格式统一（ISO 8601 yyyy-mm-dd hh:mi:ss）；生效范围：仅第 344 行读取块投影表达式，第一区块落库物理列 SYSDATETIME() 原生 DATETIME2、CTE 列投影、JSON 快照、占位符与 ~ 分隔符零改动。
   2026-09-19 17:20:00 | 剔除条件变更 | dim_version_scope CTE 绩效大类剔除集合由 ('1101', '1041') 变更为 ('1101', '1043')，头部业务说明同步更新为「剔除绩效大类 1101(出入院服务类)、1043(门诊诊察类)」；生效范围：仅第 122 行 WHERE 过滤条件与第 5 行头部说明文本，CTE 列投影、下游 joined/cte_role_unpivot/final、JSON 快照、Envelope 双区块与全部占位符逻辑零改动。
@@ -126,7 +126,7 @@ dim_version_scope AS (
       AND b.[PROJ_CODE] IS NOT NULL
 ),
 
--- ── Import CTE: 医技护执行划分维表作用域（仅取启用态规则） ──
+-- ── Import CTE: 医技护临执行划分维表作用域（仅取启用态规则） ──
 dim_exec_ratio_raw AS (
     SELECT
         r.[HIS_DEPT_CODE],
@@ -139,12 +139,15 @@ dim_exec_ratio_raw AS (
         r.[TECH_HPS_DEPT_CODE],
         r.[TECH_HPS_DEPT_NAME],
         r.[NURSE_HPS_DEPT_CODE],
-        r.[NURSE_HPS_DEPT_NAME]
+        r.[NURSE_HPS_DEPT_NAME],
+        r.[CLINICAL_EXEC_RATIO],
+        r.[CLINICAL_HPS_DEPT_CODE],
+        r.[CLINICAL_HPS_DEPT_NAME]
     FROM dbo.[DIM_DEPT_ITEM_EXEC_RATIO] AS r WITH (NOLOCK)
     WHERE r.[IS_ENABLED] = 1
 ),
 
--- ── Logical CTE: 事实(聚合) × 绩效大类 × 医技护执行划分 关联（宽表三角色并列，供下游行转列消费） ──
+-- ── Logical CTE: 事实(聚合) × 绩效大类 × 医技护临执行划分 关联（宽表四角色并列，供下游行转列消费） ──
 joined AS (
     SELECT
         DATEADD(MONTH, 1, DATEFROMPARTS(CAST('{year}' AS INT), CAST('{month}' AS INT), 1)) AS BIZ_EPOCH,
@@ -163,12 +166,15 @@ joined AS (
         ISNULL(x.[DOC_EXEC_RATIO],   CAST(0.00000000 AS DECIMAL(18,8))) AS DOC_EXEC_RATIO,
         ISNULL(x.[TECH_EXEC_RATIO],  CAST(0.00000000 AS DECIMAL(18,8))) AS TECH_EXEC_RATIO,
         ISNULL(x.[NURSE_EXEC_RATIO], CAST(0.00000000 AS DECIMAL(18,8))) AS NURSE_EXEC_RATIO,
+        ISNULL(x.[CLINICAL_EXEC_RATIO], CAST(0.00000000 AS DECIMAL(18,8))) AS CLINICAL_EXEC_RATIO,
         x.[DOC_HPS_DEPT_CODE],
         x.[DOC_HPS_DEPT_NAME],
         x.[TECH_HPS_DEPT_CODE],
         x.[TECH_HPS_DEPT_NAME],
         x.[NURSE_HPS_DEPT_CODE],
-        x.[NURSE_HPS_DEPT_NAME]
+        x.[NURSE_HPS_DEPT_NAME],
+        x.[CLINICAL_HPS_DEPT_CODE],
+        x.[CLINICAL_HPS_DEPT_NAME]
     FROM fact_raw AS f
     INNER JOIN dim_version_scope AS c
         ON f.[PROJ_CODE] = c.[PROJ_CODE]
@@ -196,9 +202,10 @@ cte_role_unpivot AS (
     FROM joined AS j
     CROSS APPLY (
         VALUES
-            ('医生', j.[DOC_EXEC_RATIO],   j.[DOC_HPS_DEPT_CODE],   j.[DOC_HPS_DEPT_NAME]),
-            ('技师', j.[TECH_EXEC_RATIO],  j.[TECH_HPS_DEPT_CODE],  j.[TECH_HPS_DEPT_NAME]),
-            ('护士', j.[NURSE_EXEC_RATIO], j.[NURSE_HPS_DEPT_CODE], j.[NURSE_HPS_DEPT_NAME])
+            ('医生', j.[DOC_EXEC_RATIO],      j.[DOC_HPS_DEPT_CODE],      j.[DOC_HPS_DEPT_NAME]),
+            ('技师', j.[TECH_EXEC_RATIO],     j.[TECH_HPS_DEPT_CODE],     j.[TECH_HPS_DEPT_NAME]),
+            ('护士', j.[NURSE_EXEC_RATIO],    j.[NURSE_HPS_DEPT_CODE],    j.[NURSE_HPS_DEPT_NAME]),
+            ('临床', j.[CLINICAL_EXEC_RATIO], j.[CLINICAL_HPS_DEPT_CODE], j.[CLINICAL_HPS_DEPT_NAME])
     ) AS u([ROLE_NAME], [EXEC_RATIO], [HPS_DEPT_CODE], [HPS_DEPT_NAME])
     WHERE 1 =1
       AND u.[HPS_DEPT_CODE] IN {struct_codes}
