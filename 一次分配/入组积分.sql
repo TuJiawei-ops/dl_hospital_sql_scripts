@@ -55,6 +55,7 @@
   {struct_codes}: 核算单元过滤集 (如 ('10001', '10002'))
 
   修改日志：
+  2026-09-20 11:00:00 | 读取层规范 | 修补 CTE_DWD_READ_ALIAS 层的 [CREATE_TIME] 投影，使用 CONVERT(VARCHAR(19), [CREATE_TIME], 120) 实现日期时间强制文本化。
   2026-09-18 13:00:00 | 字段微调 | 第一区块持久化 INSERT/SELECT 补齐 [RVU_VAL] 物理列投影，与 DWD_FIN_CALC_ALLOC1_DETAIL_LOG 新增属性列 1:1 对齐（投影源 = final 层已透传的 [RVU] 单项点数，经 CAST(... AS DECIMAL(18,8)) 收敛至全局强制精度；INSERT 列位插入于 [ITEM_CAT_NAME] 之后、[EXEC_ROLE] 之前）。
   2026-09-17 16:00:00 | 架构持久化 | Envelope Pattern 双区块重构：新增第一区块（波浪号隔离前）前置幂等 DELETE（按 CALC_YEAR/CALC_MONTH/ITEM_CODE='ITEM_TCM_ADVANTAGE_DISEASE_SCORE'/UNIT_CODE 清场，覆盖 UQ 前 4 列故语义安全），计算链路封装为 cte_rvu → src → final（final 层年份/月份强制文本化并生成四段式审计文本），INSERT 落至 DWD_FIN_CALC_ALLOC1_DETAIL_LOG（FINAL_VALUE=入组积分 / TOTAL_QTY=入组人次 / EXEC_ROLE=执行人员类型，病种与 RVU 配置快照经 FOR JSON PATH 收敛入 CALC_DETAIL_JSON）；第二区块以波浪号隔离，CTE_DWD_READ_ALIAS 读取物理表并严格承接 struct_code/struct_name/result_value 模板契约；头部业务定义、依赖契约、关键纠偏与占位符清单同步对齐落库口径。
   2026-09-17 15:00:00 | 指标扩展 | 引入 RVU 关联与入组积分计算：SELECT 投影新增 CASE WHEN 衍生项目编码映射（A08.01.02×1001→'METRIC_DRG_DZHZ_DOCTOR'、A08.01.02×1002→'METRIC_DRG_DZHZ_NURSE'、A08.01.15×1001→'METRIC_DRG_YXB_DOCTOR'、A08.01.15×1002→'METRIC_DRG_YXB_NURSE'），并 LEFT JOIN dbo.[DIM_PRF_ITEM_RVU_VERSION]（限定 ORG_CODE='1001'，零版本寻址 1:1 直连）取 [RVU_VAL]；新增导出 [衍生项目编码] / [RVU] / [入组积分]（= COUNT(1) × ISNULL(RVU_VAL,0)，DECIMAL(18,8) 精度），GROUP BY 同步纳入衍生项目编码表达式与 rvu.[RVU_VAL]；头部依赖契约与关键纠偏补录 RVU 维表血缘、零版本寻址与积分口径锚点；时间/占位符过滤与拉链时效边界零改动。
@@ -322,7 +323,7 @@ WITH CTE_DWD_READ_ALIAS AS (
         [TOTAL_QTY]             AS [汇总数量],
         [CALC_PROCESS_TEXT]     AS [计算过程描述],
         [CALC_DETAIL_JSON]      AS [明细JSON],
-        [CREATE_TIME]           AS [创建时间]
+        CONVERT(VARCHAR(19), [CREATE_TIME], 120) AS [创建时间]
     FROM [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]
     -- 【格式规范】占位符条件 [UNIT_CODE] IN {struct_codes} 独占一行并以 AND 开头，便于按单元降维调试
     WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)

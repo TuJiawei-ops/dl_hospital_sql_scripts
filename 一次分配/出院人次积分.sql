@@ -23,6 +23,7 @@
   {struct_codes}: 核算单元过滤集 (如 ('10001', '10002'))
 
   修改日志:
+  2026-09-20 11:00:00 | 读取层规范 | 修补 CTE_DWD_READ_ALIAS 层的 [CREATE_TIME] 投影，使用 CONVERT(VARCHAR(19), [CREATE_TIME], 120) 实现日期时间强制文本化。
   2026-09-18 13:00:00 | 字段微调 | 第一区块持久化 INSERT/SELECT 补齐 [RVU_VAL] 物理列投影，与 DWD_FIN_CALC_ALLOC1_DETAIL_LOG 新增属性列 1:1 对齐（投影源 = src 层已导出的 [RVU] 单项点数，经 CAST(... AS DECIMAL(18,8)) 收敛至全局强制精度；INSERT 列位插入于 [ITEM_CAT_NAME] 之后、[EXEC_ROLE] 之前）。
   2026-09-17 10:30:00 | 映射修正 | 纠偏 PROJ_NAME 映射：在 src CTE 中增加 [项目名称] 映射（1001->出院人次-医生，1002->出院人次-护士），替换落库投影 f.[人员类型] 为 f.[项目名称]，实现 PROJ_CODE 与 PROJ_NAME 完全对齐。
   2026-09-16 21:30:00 | 文件重命名 | 脚本由「出入院服务项目积分.sql」正式更名为「出院人次积分.sql」并同步全链元数据：头部 Relative Path 与脚本名称标注对齐新文件名；落库投影 [SCRIPT_NAME] 常量由 N'出入院服务项目积分.sql' 改为 N'出院人次积分.sql'，保证持久化日志与物理脚本文件精准一致；同步修正跨血缘引用文件 analyses/排查_出院服务未映射核算单元科室明细.sql 的口径溯源标注；核算逻辑、ITEM_CODE、占位符契约与双区块结构零改动。
@@ -281,7 +282,7 @@ WITH CTE_DWD_READ_ALIAS AS (
         [TOTAL_QTY]             AS [汇总数量],
         [CALC_PROCESS_TEXT]     AS [计算过程描述],
         [CALC_DETAIL_JSON]      AS [明细JSON],
-        [CREATE_TIME]           AS [创建时间]
+        CONVERT(VARCHAR(19), [CREATE_TIME], 120) AS [创建时间]
     FROM [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]
     -- 【格式规范】占位符条件 [UNIT_CODE] IN {struct_codes} 独占一行并以 AND 开头，便于按单元降维调试
     WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
