@@ -9,6 +9,7 @@
              '{start_time}' / '{end_time}' 严格收敛至底层事实表 [dbo].[PF临时医疗服务项目26A] 的 [执行时间] 精确时间窗口筛选。
 
   修改日志：
+  2026-09-20 10:20:00 | 字段格式化 | 第二区块 CTE_DWD_READ_ALIAS 中 [CREATE_TIME] 字段补齐 CONVERT(VARCHAR(19), ..., 120) 显式文本化转换，确保接口读取格式统一。
   2026-09-18 15:00:00 | 时间维度变更 | 将核心维度 [接诊时间] 重构替换为 [执行时间]。具体落点：final CTE 派生列 [接诊日期年份]/[接诊日期月份] 更名为 [执行日期年份]/[执行日期月份]（YEAR/MONTH 取值源切至 f.[执行时间]）；LEFT JOIN cte_staff_post 的年份/月份关联条件切至 f.[执行时间]；LEFT JOIN dbo.[DIM_WORK_CALENDAR] 的 CAST(... AS DATE) 关联条件切至 f.[执行时间]；WHERE 时间窗口过滤切至 f.[执行时间]（精准字段比较，无函数包裹，SARGability 完整保留）；GROUP BY 时间分组字段切至 f.[执行时间]；第一区块 INSERT 的 [CALC_YEAR]/[CALC_MONTH] 投影源与 JSON 序列化 [核算年份]/[核算月份] 映射源同步更正为执行日期年份/月份列。计算口径（积分 = 项目点数 × 汇总数量 × 学科系数 × 绩效核算系数）、聚合粒度、INSERT 列清单、第二区块读取逻辑与模板占位符契约零改动。
   2026-09-18 14:00:00 | 参数说明纠偏 | 头部补录「参数作用域」注释块：'{start_time}' / '{end_time}' 的语义载体已随本次时间维度变更由 [缴费时间] 迁移至 [接诊时间]，明确其仅作用于事实表 [接诊时间] 精确时间窗口筛选，严禁外溢至落库日志表操作；同时显式声明 '{year}' / '{month}' 的账期清场与读取作用域。历史日志（2026-09-17 17:00:00 条目）为不可篡改履历，其中 [缴费时间] 表述保留原貌，不再回溯改写。
   2026-09-18 14:00:00 | 时间维度变更 | 将核心维度 [缴费时间] 重构替换为 [接诊时间]，包含事实表时间窗口筛选、关联岗位系数/工作日历的时间维度匹配，以及 final CTE 与落库日志的年份/月份派生列。具体落点：final CTE 派生列 [缴费日期年份]/[缴费日期月份] 更名为 [接诊日期年份]/[接诊日期月份]（YEAR/MONTH 取值源切至 f.[接诊时间]）；LEFT JOIN cte_staff_post 的年份/月份关联条件切至 f.[接诊时间]；LEFT JOIN dbo.[DIM_WORK_CALENDAR] 的 CAST(... AS DATE) 关联条件切至 f.[接诊时间]；WHERE 时间窗口过滤切至 f.[接诊时间]（精准字段比较，无函数包裹，SARGability 完整保留）；GROUP BY 时间分组字段切至 f.[接诊时间]；第一区块 INSERT 的 [CALC_YEAR]/[CALC_MONTH] 投影源与 JSON 序列化 [核算年份]/[核算月份] 映射源同步更正为接诊日期年份/月份列。计算口径（积分 = 项目点数 × 汇总数量 × 学科系数 × 绩效核算系数）、聚合粒度、INSERT 列清单、第二区块读取逻辑与模板占位符契约零改动。
@@ -307,7 +308,7 @@ WITH CTE_DWD_READ_ALIAS AS (
         [TOTAL_QTY]             AS [汇总数量],
         [CALC_PROCESS_TEXT]     AS [计算过程描述],
         [CALC_DETAIL_JSON]      AS [明细JSON],
-        [CREATE_TIME]           AS [创建时间]
+        CONVERT(VARCHAR(19), [CREATE_TIME], 120) AS [创建时间]
     FROM [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]
     WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
       AND [CALC_MONTH] = CAST('{month}' AS INT)
