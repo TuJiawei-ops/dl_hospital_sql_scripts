@@ -4,16 +4,16 @@
   业务说明: 排查指定【开单时间】范围内 dbo.[PF临时医疗服务项目26A] 中未在 dbo.[DIM_DEPT_ITEM_EXEC_RATIO]
             配置的 (HIS_DEPT_CODE, ITEM_CODE) 组合，输出缺失映射清单供业务按月补全配置。
             输出粒度: HIS 科室编码 × HIS 科室名称 × 项目代码 × 项目名称 × HIS 类别名称
-  数据流向: dbo.[PF临时医疗服务项目26A]        (事实层, [开单科室代码] BIGINT / [开单时间] DATETIME / [项目代码] NVARCHAR(60))
+  数据流向: dbo.[PF临时医疗服务项目26A]        (事实层, [执行科室代码] BIGINT / [开单时间] DATETIME / [项目代码] NVARCHAR(60))
             ──(id)──▶ dbo.[sjjk_bmb_2025_06_01] (字典桥接: [id] BIGINT 1:1 ➔ [编码] NVARCHAR(10))
             ──(HIS_DEPT_CODE)──▶ dbo.[DIM_DEPT_ITEM_EXEC_RATIO]
                                  (执行划分维表, 生效态 IS_ENABLED = 1 过滤唯一索引)
   版本差异: ① 本版按 [开单时间] 闭区间切片（全量版为全账期扫描），端点由调用方注入；
             ② 本版剔除非核算类七个大类（较全量版额外纳入「检验费」）；
-            ③ 时间基准为 [开单时间]，生产计算脚本采用 [缴费时间]/[执行时间] 动态路由，账期归属并非同一集合。
-  口径声明: ① 按【开单维度】校验配置（HIS_DEPT_CODE = 开单科室代码桥接编码），生产计算脚本消费的是
-            【执行维度】（HIS_DEPT_CODE = 执行科室代码桥接编码），故本清单为「开单科室侧配置缺口」
-            参考视图，与执行维度计算缺口并非同一集合。
+            ③ 时间基准为 [开单时间]（事实层业务发生时间，维度与 [执行科室] 正交），生产计算脚本采用
+            [缴费时间]/[执行时间] 动态路由，账期归属并非同一集合。
+  口径声明: ① 按【执行维度】校验配置（HIS_DEPT_CODE = 执行科室代码桥接编码），与生产计算脚本
+            消费的执行维度口径 1:1 对齐，本清单即执行维度配置缺口集合。
             ② 不施加绩效大类（ITEM_CAT_CODE）剪枝，不折叠、不寻版本，以最大范围暴露配置缺口。
             ③ 【性能提示】[开单时间] 走闭区间裸列比较（列侧无函数包裹）；如响应偏慢，
             建议评估在 [开单时间] 上补非聚簇索引后重跑。
@@ -24,6 +24,7 @@
     '{end_time}'   : 开单时间范围终点（带单引号文本，如 '2024-01-31 23:59:59.997'）
 
   修改日志：
+  2026-09-22 16:30:00 | 重构 | 校验维度更正：关联字段由 [开单科室代码] 切换为 [执行科室代码]
   2026-09-22 16:10:00 | 优化 | NOT IN 剔除名单中补全 N'卫生材料' 类别
   2026-09-22 15:30:00 | 优化 | 注释去熵、清理冗余段落、修正字段血缘与对齐导入模板空列
   2026-09-22 13:00:00 | 重构 | 增加按月切片过滤、优化排序规则为业务主键升序
@@ -55,10 +56,10 @@ SELECT
    ,CAST(NULL AS DATETIME)                                           AS [项目新增日期]
    ,CAST(NULL AS NVARCHAR(1000))                                     AS [备注]
 FROM (
-    -- 事实层【开单科室 × 项目】预聚合去重
+    -- 事实层【执行科室 × 项目】预聚合去重
     SELECT
         b.[HIS_DEPT_CODE]                                            AS HIS_DEPT_CODE
-       ,src.[开单科室]                                                AS HIS_DEPT_NAME
+       ,src.[执行科室]                                                AS HIS_DEPT_NAME
        ,src.[项目代码]                                                AS ITEM_CODE
        ,src.[项目名称]                                                AS ITEM_NAME
        ,src.[项目大类]                                                AS HIS_CAT_NAME
@@ -66,15 +67,15 @@ FROM (
        ,CAST(SUM(CAST(src.[金额] AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS TOTAL_AMOUNT
     FROM dbo.[PF临时医疗服务项目26A] AS src WITH (NOLOCK)
     INNER JOIN (
-        -- 部门字典桥接（开单科室代码 → HIS 业务编码）
+        -- 部门字典桥接（执行科室代码 → HIS 业务编码）
         SELECT
             b.[id]                                                   AS DEPT_ID
            ,b.[编码]                                                  AS HIS_DEPT_CODE
         FROM dbo.[sjjk_bmb_2025_06_01] AS b WITH (NOLOCK)
     ) AS b
-        ON src.[开单科室代码] = b.[DEPT_ID]
+        ON src.[执行科室代码] = b.[DEPT_ID]
     WHERE 1=1
-      AND src.[开单科室代码] IS NOT NULL
+      AND src.[执行科室代码] IS NOT NULL
       AND src.[项目代码] IS NOT NULL
       -- ── 开单时间范围过滤（模板占位符独占单行 + 行首 AND + 强类型化，满足 §6 / §9 隔离规范） ──
       AND src.[开单时间] >= CAST('{start_time}' AS DATETIME)
@@ -86,7 +87,7 @@ FROM (
       )
     GROUP BY
         b.[HIS_DEPT_CODE]
-       ,src.[开单科室]
+       ,src.[执行科室]
        ,src.[项目代码]
        ,src.[项目名称]
        ,src.[项目大类]
