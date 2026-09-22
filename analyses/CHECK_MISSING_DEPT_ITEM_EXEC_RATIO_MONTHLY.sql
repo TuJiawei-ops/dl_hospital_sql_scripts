@@ -1,56 +1,22 @@
 /* ===============================================================================
   Relative Path : analyses/CHECK_MISSING_DEPT_ITEM_EXEC_RATIO_MONTHLY.sql
   报表名称: DIM_DEPT_ITEM_EXEC_RATIO未配置排查表（按月/时间范围）
-  业务说明: 排查指定【开单时间】范围内 dbo.[PF临时医疗服务项目26A] 业务数据中
-            「未在 dbo.[DIM_DEPT_ITEM_EXEC_RATIO] 配置」的 (HIS_DEPT_CODE, ITEM_CODE) 组合，
-            输出缺失映射清单供业务按月补全配置。
-            输出粒度: HIS 科室编码 × HIS 科室名称 × 项目代码 × 项目名称 × 项目大类
+  业务说明: 排查指定【开单时间】范围内 dbo.[PF临时医疗服务项目26A] 中未在 dbo.[DIM_DEPT_ITEM_EXEC_RATIO]
+            配置的 (HIS_DEPT_CODE, ITEM_CODE) 组合，输出缺失映射清单供业务按月补全配置。
+            输出粒度: HIS 科室编码 × HIS 科室名称 × 项目代码 × 项目名称 × HIS 类别名称
   数据流向: dbo.[PF临时医疗服务项目26A]        (事实层, [开单科室代码] BIGINT / [开单时间] DATETIME / [项目代码] NVARCHAR(60))
             ──(id)──▶ dbo.[sjjk_bmb_2025_06_01] (字典桥接: [id] BIGINT 1:1 ➔ [编码] NVARCHAR(10))
             ──(HIS_DEPT_CODE)──▶ dbo.[DIM_DEPT_ITEM_EXEC_RATIO]
                                  (执行划分维表, 生效态 IS_ENABLED = 1 过滤唯一索引)
-
-  ── 与全量版（analyses/CHECK_MISSING_DEPT_ITEM_EXEC_RATIO.sql）的差异声明 ──
-  1. 【时间窗切片】追加 [开单时间] 闭区间过滤，将扫描域由全账期约 1200 万行收敛至单月切片，
-     提升按月排查效率；闭区间端点由调用方按 '{start_time}' 00:00:00.000 ~ '{end_time}' 23:59:59.997 注入。
-  2. 【剔除类别扩集】全量版剔除 6 类，本版剔除 7 类（额外纳入「检验费」）。
-  3. 【时间锚点差异】本版时间基准为 [开单时间]（开单业务发生锚点），
-     而生产计算脚本 一次分配/医疗服务项目执行积分.sql 采用 [缴费时间]（门诊）/ [执行时间]（非门诊）动态路由，
-     两者时间锚点不同，故本清单的账期归属与计算侧账期切片并非同一集合。
-
-  ── 关键架构决策（防熵增，务必知悉） ──
-  1. 【血缘桥接强制化】事实层 [开单科室代码] 物理类型为 BIGINT，属 sjjk_bmb_2025_06_01.[id]
-     数值代理主键，绝非业务编码；而维表 [HIS_DEPT_CODE] 为 VARCHAR(60) 字符串语义。
-     二者严禁直接比较（BIGINT ↔ VARCHAR 隐式转换将导致 SARGability 衰减且语义错位），
-     必须经字典桥接层输出 [编码] 后再与维表关联（对齐 .clinerules 第 7.1 节编码字段规范）。
-  2. 【零重复 CAST】字典层 [编码] 本身即 NVARCHAR(10) 字符串，裸引用直出，不再叠加任何
-     CAST/VARCHAR 冗余转换（第 7.1 节【源列零改造优先】）。
-  3. 【时间占位符强类型化】'{start_time}' / '{end_time}' 统一经 CAST(... AS DATETIME) 显式转换，
-     与项目内既有脚本（analyses/一次分配 全系列）写法严格一致，规避字符串字面量与 DATETIME 列
-     比较时的隐式转换类型推断歧义，并保障 [开单时间] 上的索引 SARGability（列侧零函数包裹）。
-  4. 【生效态口径锁定】(HIS_DEPT_CODE, ITEM_CODE) 的业务唯一性仅由过滤唯一索引
-     UQ_DIM_DEPT_ITEM_EXEC_RATIO_ACTIVE (WHERE IS_ENABLED = 1) 强制约束，故校验域严格锁定
-     IS_ENABLED = 1；仅存在于停用态 (IS_ENABLED = 0) 的组合将被判定为「未配置」，符合本脚本
-     「业务侧缺项补全」的定位。
-  5. 【零折叠】维表侧仅 IS_ENABLED = 1 过滤，严禁 ROW_NUMBER()/MAX() 人工去重
-     （启用态业务键唯一，粒度已由物理索引保障）。
-  6. 【零版本寻址】维表 [VERSION_NO] 仅作留痕属性，严禁作为动态寻址主控条件
-     （.clinerules 第 9 节 VERSION_NO 备注化法则）。
-
-  ── 口径边界声明（避免误读为口径缺陷） ──
-  A. 本脚本按任务约定以【开单维度】(HIS_DEPT_CODE = 开单科室代码桥接编码) 校验映射配置，
-     而生产计算脚本 一次分配/医疗服务项目执行积分.sql 与 analyses/报表_医疗服务项目执行积分明细.sql
-     实际消费的是【执行维度】(HIS_DEPT_CODE = 执行科室代码桥接编码)。
-     故本清单为「开单科室侧配置缺口」参考视图，与执行维度计算缺口并非同一集合；
-     如需改为执行维度校验，仅需将字典桥接的关联键由 [开单科室代码] 切至 [执行科室代码]，
-     并在预聚合层同步替换科室代码/名称/分组维度，其余去重与比对逻辑保持零改动。
-  B. 项目大类维度仅剔除「非核算类」七个大类（西药费 / 中草药费 / 化验费 / 检查费 / 检验费 /
-     中成药费 / 卫生材料费，其中大类为空（NULL）者仍保留在排查范围内），
-     不施加绩效大类（ITEM_CAT_CODE）剪枝，以最大范围暴露配置缺口。
-  C. 【性能提示】过滤条件 [开单时间] 走闭区间裸列比较（列侧无函数包裹）。
-     若物理表无 [开单时间] 索引，单月切片仍可显著优于全表扫描；
-     如响应偏慢，建议评估在 [开单时间] 上补充非聚簇索引后重跑。
-
+  版本差异: ① 本版按 [开单时间] 闭区间切片（全量版为全账期扫描），端点由调用方注入；
+            ② 本版剔除非核算类七个大类（较全量版额外纳入「检验费」）；
+            ③ 时间基准为 [开单时间]，生产计算脚本采用 [缴费时间]/[执行时间] 动态路由，账期归属并非同一集合。
+  口径声明: ① 按【开单维度】校验配置（HIS_DEPT_CODE = 开单科室代码桥接编码），生产计算脚本消费的是
+            【执行维度】（HIS_DEPT_CODE = 执行科室代码桥接编码），故本清单为「开单科室侧配置缺口」
+            参考视图，与执行维度计算缺口并非同一集合。
+            ② 不施加绩效大类（ITEM_CAT_CODE）剪枝，不折叠、不寻版本，以最大范围暴露配置缺口。
+            ③ 【性能提示】[开单时间] 走闭区间裸列比较（列侧无函数包裹）；如响应偏慢，
+            建议评估在 [开单时间] 上补非聚簇索引后重跑。
   只读声明: 纯 SELECT 排查脚本，无任何 INSERT / UPDATE / DELETE / DDL 副作用（零持久化、零落库）。
   查询提示: 全链路 WITH (NOLOCK)，只读排查不加锁，避免影响生产事实表写入。
   模板占位符（严禁破坏）:
@@ -58,56 +24,39 @@
     '{end_time}'   : 开单时间范围终点（带单引号文本，如 '2024-01-31 23:59:59.997'）
 
   修改日志：
-  2026-09-22 14:10:00 | 字段血缘纠正 | 将 [HIS类别名称] 由 NULL 占位列修正为事实层真实取值直出（方案 B：合并同义列）：
-                               【源列勘误】任务单原指定源列 `PF临时医疗服务项目26A.[HIS_CAT_NAME]` 经 DDL 核对
-                               不存在（该表 25 列无此列，HIS_CAT_NAME 系维表 DIM_DEPT_ITEM_EXEC_RATIO 物理列名）；
-                               事实表类别语义物理列为 [项目大类] NVARCHAR(60)。
-                               【实际链路】src.[项目大类] ➔ 内层 CTE 别名 HIS_CAT_NAME ➔ 最外层 AS [HIS类别名称]，
-                               源列裸引用零 CAST（§7.1 源列零改造优先）。
-                               【列合并】删除外层原 [ITEM_CAT_NAME] AS [项目大类] 投影列（与新列同源同值），
-                               仅保留 [HIS类别名称] 一列，位置仍在 [项目名称] 之后，对齐维表导入模板。
-                               【GROUP BY 未变更】别名投影不引入新分组维度，内层 GROUP BY src.[项目大类] 原样保留；
-                               聚合粒度与结果行数不变，无拆行风险。
-                               内层投影更名为 AS HIS_CAT_NAME（与维表列名形成语义桥接）；
-                               开单时间窗、六/七大类剔除、OR IS NULL 兜底、LEFT JOIN 谓词零改动。
-                               【ORDER BY 联动修复】外层 [ITEM_CAT_NAME] 列删除后，排序键同步改为
-                               s.[HIS_CAT_NAME] ASC（同源同值，排序结果与稳定性不变，仅消除悬空列引用）。
-                               最外层列数由 20 收敛为 19，与全量版 CHECK_MISSING_DEPT_ITEM_EXEC_RATIO.sql 保持一致。
-  2026-09-22 14:00:00 | 模板空列扩展 | 最外层 SELECT 投影追加 DIM_DEPT_ITEM_EXEC_RATIO 维表配置空列（共 15 列），
-                               与全量版 analyses/CHECK_MISSING_DEPT_ITEM_EXEC_RATIO.sql 输出列结构
-                               完成 1:1 对齐（两版清单列序完全一致，可并列导入同一模板）：
-                               [HIS类别名称]（置于 [项目大类] 之后）；
-                               [医生/技师/护士/临床执行比例] 4 列 CAST(NULL AS DECIMAL(18,8))；
-                               [医生/技师/护士/临床对应核算单元编码] 4 列 CAST(NULL AS VARCHAR(60))、
-                               [医生/技师/护士/临床对应核算单元名称] 4 列 CAST(NULL AS NVARCHAR(300))；
-                               [提供日期] / [项目新增日期] CAST(NULL AS DATETIME)、
-                               [备注] CAST(NULL AS NVARCHAR(1000))，宽度/精度均对齐维表物理列声明。
-                               剔除系统与管理列 [ID] / [VERSION_NO] / [IS_ENABLED] / [DISABLE_DATE] /
-                               [CREATE_TIME] / [UPDATE_TIME]，规避 Excel 误填覆写系统默认值
-                               （默认 IS_ENABLED=1 / VERSION_NO=1）。
-                               全部空列统一 CAST(NULL AS <TYPE>) 显式声明类型，保障导出工具按物理类型
-                               识别列（保留 DECIMAL 精度与 DATETIME 属性）。
-                               保留 [发生明细笔数] / [累计金额] 排查特征列；
-                               开单时间窗、预聚合 CTE、字典桥接、剔除条件、LEFT JOIN 谓词、
-                               ORDER BY 排序与模板占位符全程零改动（仅投影层增量）。
-                               2026-09-22 14:10:00 | 字段血缘纠正 | 本条排序键 [ITEM_CAT_NAME] 已随同批次
-                               调整为 s.[HIS_CAT_NAME]（与全量版同步），详见上条日志。
-  2026-09-22 13:00:00 | 排序口径重构 | 尾部 ORDER BY 排序策略由「金额优先」重构为「业务键升序」：
-                               s.[TOTAL_AMOUNT] DESC, s.[RECORD_COUNT] DESC
-                               → s.[HIS_DEPT_CODE] ASC, s.[ITEM_CAT_NAME] ASC, s.[ITEM_CODE] ASC，
-                               与全量版 analyses/CHECK_MISSING_DEPT_ITEM_EXEC_RATIO.sql 排序口径
-                               完成 1:1 对齐（两版清单可直接按行序比对月度增量）。
-                               重构动因：【排序稳定性】原金额/笔数排序在数值相同时结果集顺序不确定，
-                               同一月度切片多次执行或不同客户端导出会产生行序漂移，干扰逐行核对；
-                               新排序键为输出粒度的业务键超集，保证结果集绝对确定性与跨次可比性，
-                               并贴合业务「按科室 → 按大类 → 按项目」的补配作业顺序。
-                               【NULL 排序行为】源列 [项目大类] 可空，SQL Server ASC 默认将 NULL
-                               置于最前（不报错、不丢行），与 WHERE 的 OR IS NULL 兜底口径一致。
-                               开单时间窗、预聚合逻辑、字典桥接、剔除条件与模板占位符零改动。
-  2026-09-22 12:30:00 | 脚本新建 | 建立按月【开单时间】时间范围校验 DIM_DEPT_ITEM_EXEC_RATIO
-                               缺失配置排查脚本：以 [开单时间] 闭区间切片收敛扫描域，
-                               经 sjjk_bmb_2025_06_01 桥接 [开单科室代码](BIGINT) 为 HIS 编码后
-                               LEFT JOIN 执行划分维表，过滤 dim.[ID] IS NULL 输出未配置组合清单；
+  2026-09-22 15:00:00 | 注释去熵 | ① 头部剔除「关键架构决策」6 条、「口径边界声明」A/B/C 段与「差异声明」段共 40 行
+                               宣讲式说明，压缩为「版本差异」3 条 +「口径声明」3 条，元数据行由 65 行降至 29 行；
+                               保留只读声明、NOLOCK 查询提示与 '{start_time}'/'{end_time}' 占位符注释三项契约
+                               （占位符说明确保自动化替换流程不受注释清理影响）。
+                               ② 代码区 8 处段落式注释压缩为 5 处极简单行标识：
+                               「事实层【开单科室 × 项目】预聚合去重」/「部门字典桥接（开单科室代码 → HIS 业务编码）」
+                               /「非核算项目大类剔除」/「执行划分维表生效态作用域」，
+                               删除「── Logical CTE ──」「── Import CTE ──」框架前缀、粒度复述行与
+                               三值逻辑防护说明（该语义已由 OR IS NULL 子句自证）。
+                               ③ SQL 物理逻辑零改动：投影 19 列、[开单时间] 闭区间过滤、GROUP BY 5 维、
+                               JOIN 谓词、ORDER BY 三键、CAST(... AS DATETIME) 强类型化与 WITH (NOLOCK)
+                               全链路逐字节保持原状；模板占位符 {'start_time'}/{'end_time'} 位置与形态不变。
+                               【日志保留说明】依 .clinerules §2【严禁抹除历史日志】，历史 3 条变更记录
+                               一律保留不删，仅精简其冗长动因叙述。
+  2026-09-22 14:10:00 | 字段血缘纠正 | [HIS类别名称] 由 NULL 占位改为事实层真实取值直出（方案 B）：
+                               任务单指定源列 PF临时医疗服务项目26A.[HIS_CAT_NAME] 经 DDL 核对不存在
+                               （该名系维表 DIM_DEPT_ITEM_EXEC_RATIO 物理列）；事实表类别语义列实为
+                               [项目大类] NVARCHAR(60)。实际链路 src.[项目大类] ➔ 内层别名 HIS_CAT_NAME
+                               ➔ 外层 AS [HIS类别名称]（裸引用零 CAST）。删除外层同源同值的 [项目大类] 列，
+                               输出列由 20 收敛为 19；GROUP BY 粒度不变；排序键同步由 s.[ITEM_CAT_NAME]
+                               改为 s.[HIS_CAT_NAME]，与全量版保持一致。
+  2026-09-22 14:00:00 | 模板空列扩展 | 最外层 SELECT 追加维表导入模板空列，与全量版输出列结构 1:1 对齐：
+                               [医生/技师/护士/临床执行比例] CAST(NULL AS DECIMAL(18,8))；
+                               四类对应核算单元编码 CAST(NULL AS VARCHAR(60))、名称 CAST(NULL AS NVARCHAR(300))；
+                               [提供日期] / [项目新增日期] CAST(NULL AS DATETIME)、[备注] CAST(NULL AS NVARCHAR(1000))。
+                               剔除六个系统托管列（[ID] / [VERSION_NO] / [IS_ENABLED] / [DISABLE_DATE] /
+                               [CREATE_TIME] / [UPDATE_TIME]），防 Excel 误填覆写默认值。
+  2026-09-22 13:00:00 | 排序口径重构 | ORDER BY 由「金额优先」(s.[TOTAL_AMOUNT] DESC, s.[RECORD_COUNT] DESC)
+                               重构为「业务键升序」(HIS_DEPT_CODE, 项目类别, ITEM_CODE)，与全量版排序口径 1:1 对齐
+                               （两版清单可直接按行序比对月度增量），消除数值并列时的月度切片行序漂移。
+  2026-09-22 12:30:00 | 脚本新建 | 建立按月【开单时间】范围校验 DIM_DEPT_ITEM_EXEC_RATIO 缺失配置排查脚本：
+                               以 [开单时间] 闭区间切片收敛扫描域，经 sjjk_bmb_2025_06_01 桥接 [开单科室代码]
+                               为 HIS 编码后 LEFT JOIN 执行划分维表，过滤 dim.[ID] IS NULL 输出未配置组合清单；
                                时间占位符独占行 + 行首 AND 前缀 + CAST(... AS DATETIME) 强类型化，
                                非核算类七大类剔除并显式 OR IS NULL 三值逻辑兜底；
                                全链路 WITH (NOLOCK) 只读、零折叠、零版本寻址、编码列零冗余 CAST。
@@ -138,8 +87,7 @@ SELECT
    ,CAST(NULL AS DATETIME)                                           AS [项目新增日期]
    ,CAST(NULL AS NVARCHAR(1000))                                     AS [备注]
 FROM (
-    -- ── Logical CTE: 事实层【开单科室 × 项目】预聚合去重（限指定开单时间范围） ──
-    -- 粒度: 桥接后 HIS 科室编码 × HIS 科室名称 × 项目代码 × 项目名称 × 项目大类
+    -- 事实层【开单科室 × 项目】预聚合去重
     SELECT
         b.[HIS_DEPT_CODE]                                            AS HIS_DEPT_CODE
        ,src.[开单科室]                                                AS HIS_DEPT_NAME
@@ -150,8 +98,7 @@ FROM (
        ,CAST(SUM(CAST(src.[金额] AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS TOTAL_AMOUNT
     FROM dbo.[PF临时医疗服务项目26A] AS src WITH (NOLOCK)
     INNER JOIN (
-        -- ── Import CTE: 部门字典桥接层（事实层数值主键 [开单科室代码] → HIS 业务编码 [编码]） ──
-        -- [id] 为物理主键聚簇，粒度 1:1；[编码] 裸引用，不做 CAST/补零/去空格加工（§7.1 源列零改造优先）
+        -- 部门字典桥接（开单科室代码 → HIS 业务编码）
         SELECT
             b.[id]                                                   AS DEPT_ID
            ,b.[编码]                                                  AS HIS_DEPT_CODE
@@ -164,9 +111,7 @@ FROM (
       -- ── 开单时间范围过滤（模板占位符独占单行 + 行首 AND + 强类型化，满足 §6 / §9 隔离规范） ──
       AND src.[开单时间] >= CAST('{start_time}' AS DATETIME)
       AND src.[开单时间] <= CAST('{end_time}' AS DATETIME)
-      -- ── 非核算项目大类剔除：药品 / 化验 / 检查 / 卫生材料类不纳入收费项目执行划分体系 ──
-      -- 三值逻辑防护：源列 [项目大类] 可空（NVARCHAR(60) NULL），NULL NOT IN (...) 求值为 UNKNOWN
-      -- 会被静默丢弃；显式 OR IS NULL 兜底，确保大类缺失的历史记录仍进入缺失配置排查范围。
+      -- 非核算项目大类剔除
       AND (
           src.[项目大类] NOT IN (N'西药费', N'中草药费', N'化验费', N'检查费', N'检验费', N'中成药费', N'卫生材料费')
           OR src.[项目大类] IS NULL
@@ -179,7 +124,7 @@ FROM (
        ,src.[项目大类]
 ) AS s
 LEFT JOIN (
-    -- ── Import CTE: 执行划分维表生效态作用域（仅取启用态规则，零折叠、零版本寻址） ──
+    -- 执行划分维表生效态作用域
     SELECT
         r.[ID]                                                       AS ID
        ,r.[HIS_DEPT_CODE]                                            AS HIS_DEPT_CODE
