@@ -16,6 +16,7 @@
   模板占位符: 无（时间边界为硬编码常量，不接受 '{year}' / '{month}' / '{struct_codes}' 注入）
 
   修改日志：
+  2026-09-22 17:50:00 | 过滤扩展 | 增加院外项目 DIM_OUT_HOSP_ITEM 剔除逻辑
   2026-09-22 16:50:00 | 初始化 | 建立未配置 RVU 点数项目排查清单
   2026-09-22 16:50:00 | 优化 | NOT IN 剔除名单补全 N'卫生材料' 并增补 OR IS NULL 三值逻辑兜底
 =============================================================================== */
@@ -48,6 +49,12 @@ FROM (
       AND (
           src.[项目大类] NOT IN (N'西药费', N'中草药费', N'化验费', N'检查费', N'检验费', N'中成药费', N'卫生材料费', N'卫生材料')
           OR src.[项目大类] IS NULL
+      )
+      -- 院外项目剔除
+      AND NOT EXISTS (
+          SELECT 1
+          FROM dbo.[DIM_OUT_HOSP_ITEM] AS out_item WITH (NOLOCK)
+          WHERE out_item.[ITEM_CODE] = src.[项目代码]
       )
       -- RVU 未配置判定（存在性语义，单版本无状态匹配）
       AND NOT EXISTS (

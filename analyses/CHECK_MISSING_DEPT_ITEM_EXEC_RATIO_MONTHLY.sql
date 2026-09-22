@@ -24,6 +24,7 @@
     '{end_time}'   : 开单时间范围终点（带单引号文本，如 '2024-01-31 23:59:59.997'）
 
   修改日志：
+  2026-09-22 17:50:00 | 过滤扩展 | 增加院外项目 DIM_OUT_HOSP_ITEM 剔除逻辑
   2026-09-22 16:30:00 | 重构 | 校验维度更正：关联字段由 [开单科室代码] 切换为 [执行科室代码]
   2026-09-22 16:10:00 | 优化 | NOT IN 剔除名单中补全 N'卫生材料' 类别
   2026-09-22 15:30:00 | 优化 | 注释去熵、清理冗余段落、修正字段血缘与对齐导入模板空列
@@ -84,6 +85,12 @@ FROM (
       AND (
           src.[项目大类] NOT IN (N'西药费', N'中草药费', N'中成药费', N'卫生材料费', N'卫生材料')
           OR src.[项目大类] IS NULL
+      )
+      -- 院外项目剔除
+      AND NOT EXISTS (
+          SELECT 1
+          FROM dbo.[DIM_OUT_HOSP_ITEM] AS out_item WITH (NOLOCK)
+          WHERE out_item.[ITEM_CODE] = src.[项目代码]
       )
     GROUP BY
         b.[HIS_DEPT_CODE]
