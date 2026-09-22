@@ -58,6 +58,23 @@
     '{end_time}'   : 开单时间范围终点（带单引号文本，如 '2024-01-31 23:59:59.997'）
 
   修改日志：
+  2026-09-22 14:00:00 | 模板空列扩展 | 最外层 SELECT 投影追加 DIM_DEPT_ITEM_EXEC_RATIO 维表配置空列（共 15 列），
+                               与全量版 analyses/CHECK_MISSING_DEPT_ITEM_EXEC_RATIO.sql 输出列结构
+                               完成 1:1 对齐（两版清单列序完全一致，可并列导入同一模板）：
+                               [HIS类别名称]（置于 [项目大类] 之后）；
+                               [医生/技师/护士/临床执行比例] 4 列 CAST(NULL AS DECIMAL(18,8))；
+                               [医生/技师/护士/临床对应核算单元编码] 4 列 CAST(NULL AS VARCHAR(60))、
+                               [医生/技师/护士/临床对应核算单元名称] 4 列 CAST(NULL AS NVARCHAR(300))；
+                               [提供日期] / [项目新增日期] CAST(NULL AS DATETIME)、
+                               [备注] CAST(NULL AS NVARCHAR(1000))，宽度/精度均对齐维表物理列声明。
+                               剔除系统与管理列 [ID] / [VERSION_NO] / [IS_ENABLED] / [DISABLE_DATE] /
+                               [CREATE_TIME] / [UPDATE_TIME]，规避 Excel 误填覆写系统默认值
+                               （默认 IS_ENABLED=1 / VERSION_NO=1）。
+                               全部空列统一 CAST(NULL AS <TYPE>) 显式声明类型，保障导出工具按物理类型
+                               识别列（保留 DECIMAL 精度与 DATETIME 属性）。
+                               保留 [发生明细笔数] / [累计金额] 排查特征列；
+                               开单时间窗、预聚合 CTE、字典桥接、剔除条件、LEFT JOIN 谓词、
+                               ORDER BY 排序与模板占位符全程零改动（仅投影层增量）。
   2026-09-22 13:00:00 | 排序口径重构 | 尾部 ORDER BY 排序策略由「金额优先」重构为「业务键升序」：
                                s.[TOTAL_AMOUNT] DESC, s.[RECORD_COUNT] DESC
                                → s.[HIS_DEPT_CODE] ASC, s.[ITEM_CAT_NAME] ASC, s.[ITEM_CODE] ASC，
@@ -86,8 +103,24 @@ SELECT
    ,s.[ITEM_CODE]                                                    AS [项目代码]
    ,s.[ITEM_NAME]                                                    AS [项目名称]
    ,s.[ITEM_CAT_NAME]                                                AS [项目大类]
+   ,CAST(NULL AS NVARCHAR(300))                                      AS [HIS类别名称]
    ,s.[RECORD_COUNT]                                                 AS [发生明细笔数]
    ,s.[TOTAL_AMOUNT]                                                 AS [累计金额]
+   ,CAST(NULL AS DECIMAL(18,8))                                      AS [医生执行比例]
+   ,CAST(NULL AS DECIMAL(18,8))                                      AS [技师执行比例]
+   ,CAST(NULL AS DECIMAL(18,8))                                      AS [护士执行比例]
+   ,CAST(NULL AS DECIMAL(18,8))                                      AS [临床执行比例]
+   ,CAST(NULL AS VARCHAR(60))                                        AS [医生对应核算单元编码]
+   ,CAST(NULL AS NVARCHAR(300))                                      AS [医生对应核算单元名称]
+   ,CAST(NULL AS VARCHAR(60))                                        AS [技师对应核算单元编码]
+   ,CAST(NULL AS NVARCHAR(300))                                      AS [技师对应核算单元名称]
+   ,CAST(NULL AS VARCHAR(60))                                        AS [护士对应核算单元编码]
+   ,CAST(NULL AS NVARCHAR(300))                                      AS [护士对应核算单元名称]
+   ,CAST(NULL AS VARCHAR(60))                                        AS [临床对应核算单元编码]
+   ,CAST(NULL AS NVARCHAR(300))                                      AS [临床对应核算单元名称]
+   ,CAST(NULL AS DATETIME)                                           AS [提供日期]
+   ,CAST(NULL AS DATETIME)                                           AS [项目新增日期]
+   ,CAST(NULL AS NVARCHAR(1000))                                     AS [备注]
 FROM (
     -- ── Logical CTE: 事实层【开单科室 × 项目】预聚合去重（限指定开单时间范围） ──
     -- 粒度: 桥接后 HIS 科室编码 × HIS 科室名称 × 项目代码 × 项目名称 × 项目大类

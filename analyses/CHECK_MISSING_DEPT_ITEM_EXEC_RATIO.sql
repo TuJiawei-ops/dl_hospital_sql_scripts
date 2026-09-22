@@ -43,6 +43,25 @@
   模板占位符: 无（全账期全量扫描，不接受 '{year}' / '{month}' / '{struct_codes}' 注入）
 
   修改日志：
+  2026-09-22 14:00:00 | 模板空列扩展 | 最外层 SELECT 投影追加 DIM_DEPT_ITEM_EXEC_RATIO 维表配置空列（共 15 列），
+                               使排查结果集直接对齐维表导入模板，业务导出 Excel 后可就地填报回灌：
+                               [HIS类别名称]（置于 [项目大类] 之后，实体属性区）；
+                               [医生/技师/护士/临床执行比例] 4 列 CAST(NULL AS DECIMAL(18,8))，
+                               精度与维表四类执行比例物理列（DECIMAL(18,8) 默认 0.00000000）严格对齐；
+                               [医生/技师/护士/临床对应核算单元编码] 4 列 CAST(NULL AS VARCHAR(60))、
+                               [医生/技师/护士/临床对应核算单元名称] 4 列 CAST(NULL AS NVARCHAR(300))，
+                               宽度与维表编码/名称物理列声明完全一致，且编码列强制字符串语义（§7.1）；
+                               [提供日期] / [项目新增日期] 2 列 CAST(NULL AS DATETIME)、
+                               [备注] CAST(NULL AS NVARCHAR(1000))，对齐维表业务时间与留痕区。
+                               剔除的系统与管理列：[ID]（自增代理主键）/ [VERSION_NO]（系统赋值）/ [IS_ENABLED]
+                               （自动启用）/ [DISABLE_DATE] / [CREATE_TIME] / [UPDATE_TIME]，
+                               规避业务在 Excel 中误填导致 ETL 落库时覆写系统默认值（默认 IS_ENABLED=1 / VERSION_NO=1）。
+                               【类型语义保障】全部空列统一 CAST(NULL AS <TYPE>) 显式声明类型，
+                               确保 SSMS / Excel / 导出工具按目标物理类型识别列（保留 DECIMAL 精度与
+                               DATETIME 属性），避免裸 NULL 被推断为泛型字面量而丢失精度或产生转换乱码。
+                               保留既有排查特征列 [发生明细笔数] / [累计金额] 于实体属性区。
+                               内部预聚合 CTE、字典桥接、WHERE 过滤、LEFT JOIN 谓词、ORDER BY 排序
+                               与模板占位符全程零改动（仅投影层增量）。
   2026-09-22 13:00:00 | 排序口径重构 | 尾部 ORDER BY 排序策略由「金额优先」重构为「业务键升序」：
                                s.[TOTAL_AMOUNT] DESC, s.[RECORD_COUNT] DESC
                                → s.[HIS_DEPT_CODE] ASC, s.[ITEM_CAT_NAME] ASC, s.[ITEM_CODE] ASC。
@@ -94,8 +113,24 @@ SELECT
    ,s.[ITEM_CODE]                                                    AS [项目代码]
    ,s.[ITEM_NAME]                                                    AS [项目名称]
    ,s.[ITEM_CAT_NAME]                                                AS [项目大类]
+   ,CAST(NULL AS NVARCHAR(300))                                      AS [HIS类别名称]
    ,s.[RECORD_COUNT]                                                 AS [发生明细笔数]
    ,s.[TOTAL_AMOUNT]                                                 AS [累计金额]
+   ,CAST(NULL AS DECIMAL(18,8))                                      AS [医生执行比例]
+   ,CAST(NULL AS DECIMAL(18,8))                                      AS [技师执行比例]
+   ,CAST(NULL AS DECIMAL(18,8))                                      AS [护士执行比例]
+   ,CAST(NULL AS DECIMAL(18,8))                                      AS [临床执行比例]
+   ,CAST(NULL AS VARCHAR(60))                                        AS [医生对应核算单元编码]
+   ,CAST(NULL AS NVARCHAR(300))                                      AS [医生对应核算单元名称]
+   ,CAST(NULL AS VARCHAR(60))                                        AS [技师对应核算单元编码]
+   ,CAST(NULL AS NVARCHAR(300))                                      AS [技师对应核算单元名称]
+   ,CAST(NULL AS VARCHAR(60))                                        AS [护士对应核算单元编码]
+   ,CAST(NULL AS NVARCHAR(300))                                      AS [护士对应核算单元名称]
+   ,CAST(NULL AS VARCHAR(60))                                        AS [临床对应核算单元编码]
+   ,CAST(NULL AS NVARCHAR(300))                                      AS [临床对应核算单元名称]
+   ,CAST(NULL AS DATETIME)                                           AS [提供日期]
+   ,CAST(NULL AS DATETIME)                                           AS [项目新增日期]
+   ,CAST(NULL AS NVARCHAR(1000))                                     AS [备注]
 FROM (
     -- ── Logical CTE: 事实层【开单科室 × 项目】预聚合去重 ──
     -- 粒度: 桥接后 HIS 科室编码 × HIS 科室名称 × 项目代码 × 项目名称 × 项目大类
