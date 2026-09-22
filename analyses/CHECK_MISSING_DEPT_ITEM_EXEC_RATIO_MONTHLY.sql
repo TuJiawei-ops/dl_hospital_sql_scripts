@@ -58,6 +58,21 @@
     '{end_time}'   : 开单时间范围终点（带单引号文本，如 '2024-01-31 23:59:59.997'）
 
   修改日志：
+  2026-09-22 14:10:00 | 字段血缘纠正 | 将 [HIS类别名称] 由 NULL 占位列修正为事实层真实取值直出（方案 B：合并同义列）：
+                               【源列勘误】任务单原指定源列 `PF临时医疗服务项目26A.[HIS_CAT_NAME]` 经 DDL 核对
+                               不存在（该表 25 列无此列，HIS_CAT_NAME 系维表 DIM_DEPT_ITEM_EXEC_RATIO 物理列名）；
+                               事实表类别语义物理列为 [项目大类] NVARCHAR(60)。
+                               【实际链路】src.[项目大类] ➔ 内层 CTE 别名 HIS_CAT_NAME ➔ 最外层 AS [HIS类别名称]，
+                               源列裸引用零 CAST（§7.1 源列零改造优先）。
+                               【列合并】删除外层原 [ITEM_CAT_NAME] AS [项目大类] 投影列（与新列同源同值），
+                               仅保留 [HIS类别名称] 一列，位置仍在 [项目名称] 之后，对齐维表导入模板。
+                               【GROUP BY 未变更】别名投影不引入新分组维度，内层 GROUP BY src.[项目大类] 原样保留；
+                               聚合粒度与结果行数不变，无拆行风险。
+                               内层投影更名为 AS HIS_CAT_NAME（与维表列名形成语义桥接）；
+                               开单时间窗、六/七大类剔除、OR IS NULL 兜底、LEFT JOIN 谓词零改动。
+                               【ORDER BY 联动修复】外层 [ITEM_CAT_NAME] 列删除后，排序键同步改为
+                               s.[HIS_CAT_NAME] ASC（同源同值，排序结果与稳定性不变，仅消除悬空列引用）。
+                               最外层列数由 20 收敛为 19，与全量版 CHECK_MISSING_DEPT_ITEM_EXEC_RATIO.sql 保持一致。
   2026-09-22 14:00:00 | 模板空列扩展 | 最外层 SELECT 投影追加 DIM_DEPT_ITEM_EXEC_RATIO 维表配置空列（共 15 列），
                                与全量版 analyses/CHECK_MISSING_DEPT_ITEM_EXEC_RATIO.sql 输出列结构
                                完成 1:1 对齐（两版清单列序完全一致，可并列导入同一模板）：
@@ -75,6 +90,8 @@
                                保留 [发生明细笔数] / [累计金额] 排查特征列；
                                开单时间窗、预聚合 CTE、字典桥接、剔除条件、LEFT JOIN 谓词、
                                ORDER BY 排序与模板占位符全程零改动（仅投影层增量）。
+                               2026-09-22 14:10:00 | 字段血缘纠正 | 本条排序键 [ITEM_CAT_NAME] 已随同批次
+                               调整为 s.[HIS_CAT_NAME]（与全量版同步），详见上条日志。
   2026-09-22 13:00:00 | 排序口径重构 | 尾部 ORDER BY 排序策略由「金额优先」重构为「业务键升序」：
                                s.[TOTAL_AMOUNT] DESC, s.[RECORD_COUNT] DESC
                                → s.[HIS_DEPT_CODE] ASC, s.[ITEM_CAT_NAME] ASC, s.[ITEM_CODE] ASC，
@@ -102,8 +119,7 @@ SELECT
    ,s.[HIS_DEPT_NAME]                                                AS [HIS科室名称]
    ,s.[ITEM_CODE]                                                    AS [项目代码]
    ,s.[ITEM_NAME]                                                    AS [项目名称]
-   ,s.[ITEM_CAT_NAME]                                                AS [项目大类]
-   ,CAST(NULL AS NVARCHAR(300))                                      AS [HIS类别名称]
+   ,s.[HIS_CAT_NAME]                                                 AS [HIS类别名称]
    ,s.[RECORD_COUNT]                                                 AS [发生明细笔数]
    ,s.[TOTAL_AMOUNT]                                                 AS [累计金额]
    ,CAST(NULL AS DECIMAL(18,8))                                      AS [医生执行比例]
@@ -129,7 +145,7 @@ FROM (
        ,src.[开单科室]                                                AS HIS_DEPT_NAME
        ,src.[项目代码]                                                AS ITEM_CODE
        ,src.[项目名称]                                                AS ITEM_NAME
-       ,src.[项目大类]                                                AS ITEM_CAT_NAME
+       ,src.[项目大类]                                                AS HIS_CAT_NAME
        ,COUNT(1)                                                     AS RECORD_COUNT
        ,CAST(SUM(CAST(src.[金额] AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS TOTAL_AMOUNT
     FROM dbo.[PF临时医疗服务项目26A] AS src WITH (NOLOCK)
@@ -176,6 +192,6 @@ LEFT JOIN (
 WHERE dim.[ID] IS NULL
 ORDER BY
     s.[HIS_DEPT_CODE] ASC
-   ,s.[ITEM_CAT_NAME] ASC
+   ,s.[HIS_CAT_NAME] ASC
    ,s.[ITEM_CODE] ASC
 ;

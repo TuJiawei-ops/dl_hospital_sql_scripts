@@ -43,6 +43,25 @@
   模板占位符: 无（全账期全量扫描，不接受 '{year}' / '{month}' / '{struct_codes}' 注入）
 
   修改日志：
+  2026-09-22 14:10:00 | 字段血缘纠正 | 将 [HIS类别名称] 由 NULL 占位列修正为事实层真实取值直出，并按照方案 B 合并同义列：
+                               【源列勘误】任务单原指定源列 `PF临时医疗服务项目26A.[HIS_CAT_NAME]` 经 DDL 核对
+                               不存在（该表 25 列中无此列，`HIS_CAT_NAME` 系维表 DIM_DEPT_ITEM_EXEC_RATIO 的物理列名，
+                               `HF_CAT_CODE` 全库零命中）；事实表类别语义物理列实为 [项目大类] NVARCHAR(60)。
+                               【实际链路】src.[项目大类] ➔ 内层 CTE 别名 HIS_CAT_NAME（语义对齐维表同名列）
+                               ➔ 最外层投影 AS [HIS类别名称]，源列裸引用零 CAST（§7.1 源列零改造优先）。
+                               【列合并】原 [项目大类] 输出列与新 [HIS类别名称] 100% 同源同值，
+                               为避免导出模板出现冗余重复类别列，按方案 B 删除外层 [ITEM_CAT_NAME] 投影列，
+                               仅保留 [HIS类别名称] 一列（列序不变，仍居 [项目名称] 之后，与维表导入模板对齐）。
+                               【GROUP BY 未变更】新列仅为同一物理列 [项目大类] 的别名投影，不引入新分组维度，
+                               内层 GROUP BY src.[项目大类] 保持原样（任务单要求的「同步追加至 GROUP BY」为冗余动作，
+                               照做将产生重复分组列）；聚合粒度与行数全程不变，不存在拆行风险。
+                               内层投影由 AS ITEM_CAT_NAME 更名为 AS HIS_CAT_NAME，与维表列名形成显式语义桥接；
+                               WHERE 六/七大类剔除条件、OR IS NULL 兜底、LEFT JOIN 谓词零改动。
+                               【ORDER BY 联动修复】因外层 [ITEM_CAT_NAME] 列删除，尾部排序键同步由
+                               s.[ITEM_CAT_NAME] ASC 改为 s.[HIS_CAT_NAME] ASC（同源同值，排序结果与稳定性完全一致，
+                               仅消除对已删除列名的悬空引用，避免编译期 42S22/207 报错）。
+                               【配套影响】最外层列数由 20 列收敛为 19 列（删除 1 列 [项目大类]），
+                               剩余 19 列（实体属性 5 + 待填报配置 14）与维表导入模板列序保持 1:1。
   2026-09-22 14:00:00 | 模板空列扩展 | 最外层 SELECT 投影追加 DIM_DEPT_ITEM_EXEC_RATIO 维表配置空列（共 15 列），
                                使排查结果集直接对齐维表导入模板，业务导出 Excel 后可就地填报回灌：
                                [HIS类别名称]（置于 [项目大类] 之后，实体属性区）；
@@ -62,6 +81,8 @@
                                保留既有排查特征列 [发生明细笔数] / [累计金额] 于实体属性区。
                                内部预聚合 CTE、字典桥接、WHERE 过滤、LEFT JOIN 谓词、ORDER BY 排序
                                与模板占位符全程零改动（仅投影层增量）。
+                               2026-09-22 14:10:00 | 字段血缘纠正 | 本条排序键 [ITEM_CAT_NAME] 已随同批次
+                               [HIS类别名称] 列更名同步调整为 s.[HIS_CAT_NAME]，详见上条日志。
   2026-09-22 13:00:00 | 排序口径重构 | 尾部 ORDER BY 排序策略由「金额优先」重构为「业务键升序」：
                                s.[TOTAL_AMOUNT] DESC, s.[RECORD_COUNT] DESC
                                → s.[HIS_DEPT_CODE] ASC, s.[ITEM_CAT_NAME] ASC, s.[ITEM_CODE] ASC。
@@ -112,8 +133,7 @@ SELECT
    ,s.[HIS_DEPT_NAME]                                                AS [HIS科室名称]
    ,s.[ITEM_CODE]                                                    AS [项目代码]
    ,s.[ITEM_NAME]                                                    AS [项目名称]
-   ,s.[ITEM_CAT_NAME]                                                AS [项目大类]
-   ,CAST(NULL AS NVARCHAR(300))                                      AS [HIS类别名称]
+   ,s.[HIS_CAT_NAME]                                                 AS [HIS类别名称]
    ,s.[RECORD_COUNT]                                                 AS [发生明细笔数]
    ,s.[TOTAL_AMOUNT]                                                 AS [累计金额]
    ,CAST(NULL AS DECIMAL(18,8))                                      AS [医生执行比例]
@@ -139,7 +159,7 @@ FROM (
        ,src.[开单科室]                                                AS HIS_DEPT_NAME
        ,src.[项目代码]                                                AS ITEM_CODE
        ,src.[项目名称]                                                AS ITEM_NAME
-       ,src.[项目大类]                                                AS ITEM_CAT_NAME
+       ,src.[项目大类]                                                AS HIS_CAT_NAME
        ,COUNT(1)                                                     AS RECORD_COUNT
        ,CAST(SUM(CAST(src.[金额] AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS TOTAL_AMOUNT
     FROM dbo.[PF临时医疗服务项目26A] AS src WITH (NOLOCK)
@@ -183,6 +203,6 @@ LEFT JOIN (
 WHERE dim.[ID] IS NULL
 ORDER BY
     s.[HIS_DEPT_CODE] ASC
-   ,s.[ITEM_CAT_NAME] ASC
+   ,s.[HIS_CAT_NAME] ASC
    ,s.[ITEM_CODE] ASC
 ;
