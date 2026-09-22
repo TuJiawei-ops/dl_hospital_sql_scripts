@@ -82,7 +82,7 @@ FROM (
       AND src.[开单时间] <= CAST('{end_time}' AS DATETIME)
       -- 非核算项目大类剔除
       AND (
-          src.[项目大类] NOT IN (N'西药费', N'中草药费', N'化验费', N'检查费', N'检验费', N'中成药费', N'卫生材料费', N'卫生材料')
+          src.[项目大类] NOT IN (N'西药费', N'中草药费', N'中成药费', N'卫生材料费', N'卫生材料')
           OR src.[项目大类] IS NULL
       )
     GROUP BY
