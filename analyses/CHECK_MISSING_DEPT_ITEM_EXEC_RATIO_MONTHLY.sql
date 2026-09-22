@@ -58,6 +58,18 @@
     '{end_time}'   : 开单时间范围终点（带单引号文本，如 '2024-01-31 23:59:59.997'）
 
   修改日志：
+  2026-09-22 13:00:00 | 排序口径重构 | 尾部 ORDER BY 排序策略由「金额优先」重构为「业务键升序」：
+                               s.[TOTAL_AMOUNT] DESC, s.[RECORD_COUNT] DESC
+                               → s.[HIS_DEPT_CODE] ASC, s.[ITEM_CAT_NAME] ASC, s.[ITEM_CODE] ASC，
+                               与全量版 analyses/CHECK_MISSING_DEPT_ITEM_EXEC_RATIO.sql 排序口径
+                               完成 1:1 对齐（两版清单可直接按行序比对月度增量）。
+                               重构动因：【排序稳定性】原金额/笔数排序在数值相同时结果集顺序不确定，
+                               同一月度切片多次执行或不同客户端导出会产生行序漂移，干扰逐行核对；
+                               新排序键为输出粒度的业务键超集，保证结果集绝对确定性与跨次可比性，
+                               并贴合业务「按科室 → 按大类 → 按项目」的补配作业顺序。
+                               【NULL 排序行为】源列 [项目大类] 可空，SQL Server ASC 默认将 NULL
+                               置于最前（不报错、不丢行），与 WHERE 的 OR IS NULL 兜底口径一致。
+                               开单时间窗、预聚合逻辑、字典桥接、剔除条件与模板占位符零改动。
   2026-09-22 12:30:00 | 脚本新建 | 建立按月【开单时间】时间范围校验 DIM_DEPT_ITEM_EXEC_RATIO
                                缺失配置排查脚本：以 [开单时间] 闭区间切片收敛扫描域，
                                经 sjjk_bmb_2025_06_01 桥接 [开单科室代码](BIGINT) 为 HIS 编码后
@@ -130,6 +142,7 @@ LEFT JOIN (
    AND dim.[ITEM_CODE]     = s.[ITEM_CODE]
 WHERE dim.[ID] IS NULL
 ORDER BY
-    s.[TOTAL_AMOUNT] DESC
-   ,s.[RECORD_COUNT] DESC
+    s.[HIS_DEPT_CODE] ASC
+   ,s.[ITEM_CAT_NAME] ASC
+   ,s.[ITEM_CODE] ASC
 ;

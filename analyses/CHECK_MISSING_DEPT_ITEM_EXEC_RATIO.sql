@@ -43,6 +43,18 @@
   模板占位符: 无（全账期全量扫描，不接受 '{year}' / '{month}' / '{struct_codes}' 注入）
 
   修改日志：
+  2026-09-22 13:00:00 | 排序口径重构 | 尾部 ORDER BY 排序策略由「金额优先」重构为「业务键升序」：
+                               s.[TOTAL_AMOUNT] DESC, s.[RECORD_COUNT] DESC
+                               → s.[HIS_DEPT_CODE] ASC, s.[ITEM_CAT_NAME] ASC, s.[ITEM_CODE] ASC。
+                               重构动因：【排序稳定性】原金额/笔数排序在数值相同（如并列 0 笔、退费净额相抵）
+                               时结果集顺序不确定，同一查询多次执行或不同客户端导出会产生行序漂移，
+                               干扰业务逐行核对与增量比对；新排序键 (HIS 科室编码, 项目大类, 项目代码)
+                               为输出粒度 (编码 × 名称 × 代码 × 名称 × 大类) 的业务键子集超集，
+                               可保证结果集绝对确定性与跨次可比性，且天然贴合业务「按科室 → 按大类 → 按项目」
+                               的补配作业顺序。【NULL 排序行为】源列 [项目大类] 可空，SQL Server ASC 排序
+                               默认将 NULL 视为最小值置于组内最前（不发生报错或丢行），
+                               与下方 WHERE 的 OR IS NULL 兜底口径一致，缺失大类的待补配记录优先曝光。
+                               预聚合逻辑、字典桥接、WHERE 条件、输出列契约与模板占位符零改动。
   2026-09-22 12:00:00 | 列表精简与剪枝扩面 | ① SELECT 输出列表移除上一版追加的常量列
                                N'DIM_DEPT_ITEM_EXEC_RATIO未配置排查表' AS [报表名称]，
                                输出列恢复为 7 列纯业务字段、首列回归 s.[HIS_DEPT_CODE] AS [HIS科室编码]；
@@ -135,6 +147,7 @@ LEFT JOIN (
    AND dim.[ITEM_CODE]     = s.[ITEM_CODE]
 WHERE dim.[ID] IS NULL
 ORDER BY
-    s.[TOTAL_AMOUNT] DESC
-   ,s.[RECORD_COUNT] DESC
+    s.[HIS_DEPT_CODE] ASC
+   ,s.[ITEM_CAT_NAME] ASC
+   ,s.[ITEM_CODE] ASC
 ;
