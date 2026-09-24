@@ -368,7 +368,7 @@ def load_config() -> SyncConfig:
     only_tables = [t.strip() for t in only_raw.split(",") if t.strip()]
 
     return SyncConfig(
-        oracle_host=_env("ORACLE_HOST", "192.168.130.32"),
+        oracle_host=_env("ORACLE_HOST", "127.0.0.1"),
         oracle_port=int(_env("ORACLE_PORT", "1521")),
         oracle_service_name=_env("ORACLE_SERVICE_NAME", "xepdb1"),
         oracle_user=_env("ORACLE_USER", required=True),

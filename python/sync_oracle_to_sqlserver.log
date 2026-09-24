@@ -4,14 +4,14 @@
 2026-09-11 14:15:55 | INFO    | # 启动时间: 2026-09-11 14:15:55
 2026-09-11 14:15:55 | INFO    | # Python  : 3.14.5
 2026-09-11 14:15:55 | INFO    | ######################################################################################
-2026-09-11 14:15:55 | INFO    | [运行配置] 源端 Oracle  : 192.168.130.32:1521/xepdb1 (schema=DL_PFM)
+2026-09-11 14:15:55 | INFO    | [运行配置] 源端 Oracle  : 127.0.0.1:1521/xepdb1 (schema=DL_PFM)
 2026-09-11 14:15:55 | INFO    | [运行配置] 目标 SQLServer: 127.0.0.1,1433/hospital_performance_dalian_derma (schema=dbo)
 2026-09-11 14:15:55 | INFO    | [运行配置] ODBC 驱动    : ODBC Driver 17 for SQL Server
 2026-09-11 14:15:55 | INFO    | [运行配置] 批尺寸       : 10000
 2026-09-11 14:15:55 | INFO    | [运行配置] 幂等清空     : 启用
 2026-09-11 14:15:55 | INFO    | [运行配置] 快速批量     : 启用
 2026-09-11 14:15:55 | INFO    | [运行配置] 日志文件     : D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.log
-2026-09-11 14:15:55 | INFO    | [连接源端] Oracle 192.168.130.32:1521/xepdb1 (user=system, schema=DL_PFM)
+2026-09-11 14:15:55 | INFO    | [连接源端] Oracle 127.0.0.1:1521/xepdb1 (user=system, schema=DL_PFM)
 2026-09-11 14:15:55 | ERROR   | [致命异常] 同步流程中断: 'Connection' object has no attribute 'defaults'
 Traceback (most recent call last):
   File "D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.py", line 1093, in run
@@ -30,14 +30,14 @@ AttributeError: 'Connection' object has no attribute 'defaults'
 2026-09-11 14:16:07 | INFO    | # 启动时间: 2026-09-11 14:16:07
 2026-09-11 14:16:07 | INFO    | # Python  : 3.14.5
 2026-09-11 14:16:07 | INFO    | ######################################################################################
-2026-09-11 14:16:07 | INFO    | [运行配置] 源端 Oracle  : 192.168.130.32:1521/xepdb1 (schema=DL_PFM)
+2026-09-11 14:16:07 | INFO    | [运行配置] 源端 Oracle  : 127.0.0.1:1521/xepdb1 (schema=DL_PFM)
 2026-09-11 14:16:07 | INFO    | [运行配置] 目标 SQLServer: 127.0.0.1,1433/hospital_performance_dalian_derma (schema=dbo)
 2026-09-11 14:16:07 | INFO    | [运行配置] ODBC 驱动    : ODBC Driver 17 for SQL Server
 2026-09-11 14:16:07 | INFO    | [运行配置] 批尺寸       : 10000
 2026-09-11 14:16:07 | INFO    | [运行配置] 幂等清空     : 启用
 2026-09-11 14:16:07 | INFO    | [运行配置] 快速批量     : 启用
 2026-09-11 14:16:07 | INFO    | [运行配置] 日志文件     : D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.log
-2026-09-11 14:16:07 | INFO    | [连接源端] Oracle 192.168.130.32:1521/xepdb1 (user=system, schema=DL_PFM)
+2026-09-11 14:16:07 | INFO    | [连接源端] Oracle 127.0.0.1:1521/xepdb1 (user=system, schema=DL_PFM)
 2026-09-11 14:16:07 | INFO    | [连接源端] Oracle 连接成功
 2026-09-11 14:16:07 | INFO    | [连接目标] SQL Server 127.0.0.1,1433/hospital_performance_dalian_derma (user=sa)
 2026-09-11 14:16:07 | INFO    | [连接目标] SQL Server 连接成功 (CommandTimeout=0)
@@ -90,14 +90,14 @@ AttributeError: 'Connection' object has no attribute 'defaults'
 2026-09-11 14:16:18 | INFO    | # 启动时间: 2026-09-11 14:16:18
 2026-09-11 14:16:18 | INFO    | # Python  : 3.14.5
 2026-09-11 14:16:18 | INFO    | ######################################################################################
-2026-09-11 14:16:18 | INFO    | [运行配置] 源端 Oracle  : 192.168.130.32:1521/xepdb1 (schema=DL_PFM)
+2026-09-11 14:16:18 | INFO    | [运行配置] 源端 Oracle  : 127.0.0.1:1521/xepdb1 (schema=DL_PFM)
 2026-09-11 14:16:18 | INFO    | [运行配置] 目标 SQLServer: 127.0.0.1,1433/hospital_performance_dalian_derma (schema=dbo)
 2026-09-11 14:16:18 | INFO    | [运行配置] ODBC 驱动    : ODBC Driver 17 for SQL Server
 2026-09-11 14:16:18 | INFO    | [运行配置] 批尺寸       : 10000
 2026-09-11 14:16:18 | INFO    | [运行配置] 幂等清空     : 启用
 2026-09-11 14:16:18 | INFO    | [运行配置] 快速批量     : 启用
 2026-09-11 14:16:18 | INFO    | [运行配置] 日志文件     : D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.log
-2026-09-11 14:16:18 | INFO    | [连接源端] Oracle 192.168.130.32:1521/xepdb1 (user=system, schema=DL_PFM)
+2026-09-11 14:16:18 | INFO    | [连接源端] Oracle 127.0.0.1:1521/xepdb1 (user=system, schema=DL_PFM)
 2026-09-11 14:16:18 | INFO    | [连接源端] Oracle 连接成功
 2026-09-11 14:16:18 | INFO    | [连接目标] SQL Server 127.0.0.1,1433/hospital_performance_dalian_derma (user=sa)
 2026-09-11 14:16:18 | INFO    | [连接目标] SQL Server 连接成功 (CommandTimeout=0)
@@ -138,14 +138,14 @@ AttributeError: 'Connection' object has no attribute 'defaults'
 2026-09-11 14:16:23 | INFO    | # 启动时间: 2026-09-11 14:16:23
 2026-09-11 14:16:23 | INFO    | # Python  : 3.14.5
 2026-09-11 14:16:23 | INFO    | ######################################################################################
-2026-09-11 14:16:23 | INFO    | [运行配置] 源端 Oracle  : 192.168.130.32:1521/xepdb1 (schema=DL_PFM)
+2026-09-11 14:16:23 | INFO    | [运行配置] 源端 Oracle  : 127.0.0.1:1521/xepdb1 (schema=DL_PFM)
 2026-09-11 14:16:23 | INFO    | [运行配置] 目标 SQLServer: 127.0.0.1,1433/hospital_performance_dalian_derma (schema=dbo)
 2026-09-11 14:16:23 | INFO    | [运行配置] ODBC 驱动    : ODBC Driver 17 for SQL Server
 2026-09-11 14:16:23 | INFO    | [运行配置] 批尺寸       : 10000
 2026-09-11 14:16:23 | INFO    | [运行配置] 幂等清空     : 启用
 2026-09-11 14:16:23 | INFO    | [运行配置] 快速批量     : 启用
 2026-09-11 14:16:23 | INFO    | [运行配置] 日志文件     : D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.log
-2026-09-11 14:16:23 | INFO    | [连接源端] Oracle 192.168.130.32:1521/xepdb1 (user=system, schema=DL_PFM)
+2026-09-11 14:16:23 | INFO    | [连接源端] Oracle 127.0.0.1:1521/xepdb1 (user=system, schema=DL_PFM)
 2026-09-11 14:16:23 | INFO    | [连接源端] Oracle 连接成功
 2026-09-11 14:16:23 | INFO    | [连接目标] SQL Server 127.0.0.1,1433/hospital_performance_dalian_derma (user=sa)
 2026-09-11 14:16:23 | INFO    | [连接目标] SQL Server 连接成功 (CommandTimeout=0)
@@ -171,14 +171,14 @@ AttributeError: 'Connection' object has no attribute 'defaults'
 2026-09-11 14:16:59 | INFO    | # 启动时间: 2026-09-11 14:16:59
 2026-09-11 14:16:59 | INFO    | # Python  : 3.14.5
 2026-09-11 14:16:59 | INFO    | ######################################################################################
-2026-09-11 14:16:59 | INFO    | [运行配置] 源端 Oracle  : 192.168.130.32:1521/xepdb1 (schema=DL_PFM)
+2026-09-11 14:16:59 | INFO    | [运行配置] 源端 Oracle  : 127.0.0.1:1521/xepdb1 (schema=DL_PFM)
 2026-09-11 14:16:59 | INFO    | [运行配置] 目标 SQLServer: 127.0.0.1,1433/hospital_performance_dalian_derma (schema=dbo)
 2026-09-11 14:16:59 | INFO    | [运行配置] ODBC 驱动    : ODBC Driver 17 for SQL Server
 2026-09-11 14:16:59 | INFO    | [运行配置] 批尺寸       : 10000
 2026-09-11 14:16:59 | INFO    | [运行配置] 幂等清空     : 启用
 2026-09-11 14:16:59 | INFO    | [运行配置] 快速批量     : 启用
 2026-09-11 14:16:59 | INFO    | [运行配置] 日志文件     : D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.log
-2026-09-11 14:16:59 | INFO    | [连接源端] Oracle 192.168.130.32:1521/xepdb1 (user=system, schema=DL_PFM)
+2026-09-11 14:16:59 | INFO    | [连接源端] Oracle 127.0.0.1:1521/xepdb1 (user=system, schema=DL_PFM)
 2026-09-11 14:16:59 | INFO    | [连接源端] Oracle 连接成功
 2026-09-11 14:16:59 | INFO    | [连接目标] SQL Server 127.0.0.1,1433/hospital_performance_dalian_derma (user=sa)
 2026-09-11 14:17:00 | INFO    | [连接目标] SQL Server 连接成功 (CommandTimeout=0)
@@ -281,14 +281,14 @@ AttributeError: 'Connection' object has no attribute 'defaults'
 2026-09-11 18:55:56 | INFO    | # 启动时间: 2026-09-11 18:55:56
 2026-09-11 18:55:56 | INFO    | # Python  : 3.14.5
 2026-09-11 18:55:56 | INFO    | ######################################################################################
-2026-09-11 18:55:56 | INFO    | [运行配置] 源端 Oracle  : 192.168.130.32:1521/xepdb1 (schema=DL_PFM)
+2026-09-11 18:55:56 | INFO    | [运行配置] 源端 Oracle  : 127.0.0.1:1521/xepdb1 (schema=DL_PFM)
 2026-09-11 18:55:56 | INFO    | [运行配置] 目标 SQLServer: 127.0.0.1,1433/hospital_performance_dalian_derma (schema=dbo)
 2026-09-11 18:55:56 | INFO    | [运行配置] ODBC 驱动    : ODBC Driver 17 for SQL Server
 2026-09-11 18:55:56 | INFO    | [运行配置] 批尺寸       : 10000
 2026-09-11 18:55:56 | INFO    | [运行配置] 幂等清空     : 启用
 2026-09-11 18:55:56 | INFO    | [运行配置] 快速批量     : 启用
 2026-09-11 18:55:56 | INFO    | [运行配置] 日志文件     : D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.log
-2026-09-11 18:55:56 | INFO    | [连接源端] Oracle 192.168.130.32:1521/xepdb1 (user=system, schema=DL_PFM)
+2026-09-11 18:55:56 | INFO    | [连接源端] Oracle 127.0.0.1:1521/xepdb1 (user=system, schema=DL_PFM)
 2026-09-11 18:55:56 | INFO    | [连接源端] Oracle 连接成功
 2026-09-11 18:55:56 | INFO    | [连接目标] SQL Server 127.0.0.1,1433/hospital_performance_dalian_derma (user=sa)
 2026-09-11 18:55:56 | INFO    | [连接目标] SQL Server 连接成功 (CommandTimeout=0)
@@ -313,14 +313,14 @@ RuntimeError: 目标表不存在: [dbo].[PF临时出院数据26A]。请先执行
 2026-09-11 18:56:06 | INFO    | # 启动时间: 2026-09-11 18:56:06
 2026-09-11 18:56:06 | INFO    | # Python  : 3.14.5
 2026-09-11 18:56:06 | INFO    | ######################################################################################
-2026-09-11 18:56:06 | INFO    | [运行配置] 源端 Oracle  : 192.168.130.32:1521/xepdb1 (schema=DL_PFM)
+2026-09-11 18:56:06 | INFO    | [运行配置] 源端 Oracle  : 127.0.0.1:1521/xepdb1 (schema=DL_PFM)
 2026-09-11 18:56:06 | INFO    | [运行配置] 目标 SQLServer: 127.0.0.1,1433/hospital_performance_dalian_derma (schema=dbo)
 2026-09-11 18:56:06 | INFO    | [运行配置] ODBC 驱动    : ODBC Driver 17 for SQL Server
 2026-09-11 18:56:06 | INFO    | [运行配置] 批尺寸       : 10000
 2026-09-11 18:56:06 | INFO    | [运行配置] 幂等清空     : 启用
 2026-09-11 18:56:06 | INFO    | [运行配置] 快速批量     : 启用
 2026-09-11 18:56:06 | INFO    | [运行配置] 日志文件     : D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.log
-2026-09-11 18:56:06 | INFO    | [连接源端] Oracle 192.168.130.32:1521/xepdb1 (user=system, schema=DL_PFM)
+2026-09-11 18:56:06 | INFO    | [连接源端] Oracle 127.0.0.1:1521/xepdb1 (user=system, schema=DL_PFM)
 2026-09-11 18:56:06 | INFO    | [连接源端] Oracle 连接成功
 2026-09-11 18:56:06 | INFO    | [连接目标] SQL Server 127.0.0.1,1433/hospital_performance_dalian_derma (user=sa)
 2026-09-11 18:56:06 | INFO    | [连接目标] SQL Server 连接成功 (CommandTimeout=0)
@@ -345,14 +345,14 @@ RuntimeError: 目标表不存在: [dbo].[PF临时出院数据26A]。请先执行
 2026-09-11 18:57:31 | INFO    | # 启动时间: 2026-09-11 18:57:31
 2026-09-11 18:57:31 | INFO    | # Python  : 3.14.5
 2026-09-11 18:57:31 | INFO    | ######################################################################################
-2026-09-11 18:57:31 | INFO    | [运行配置] 源端 Oracle  : 192.168.130.32:1521/xepdb1 (schema=DL_PFM)
+2026-09-11 18:57:31 | INFO    | [运行配置] 源端 Oracle  : 127.0.0.1:1521/xepdb1 (schema=DL_PFM)
 2026-09-11 18:57:31 | INFO    | [运行配置] 目标 SQLServer: 127.0.0.1,1433/hospital_performance_dalian_derma (schema=dbo)
 2026-09-11 18:57:31 | INFO    | [运行配置] ODBC 驱动    : ODBC Driver 17 for SQL Server
 2026-09-11 18:57:31 | INFO    | [运行配置] 批尺寸       : 10000
 2026-09-11 18:57:31 | INFO    | [运行配置] 幂等清空     : 启用
 2026-09-11 18:57:31 | INFO    | [运行配置] 快速批量     : 启用
 2026-09-11 18:57:31 | INFO    | [运行配置] 日志文件     : D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.log
-2026-09-11 18:57:31 | INFO    | [连接源端] Oracle 192.168.130.32:1521/xepdb1 (user=system, schema=DL_PFM)
+2026-09-11 18:57:31 | INFO    | [连接源端] Oracle 127.0.0.1:1521/xepdb1 (user=system, schema=DL_PFM)
 2026-09-11 18:57:31 | INFO    | [连接源端] Oracle 连接成功
 2026-09-11 18:57:31 | INFO    | [连接目标] SQL Server 127.0.0.1,1433/hospital_performance_dalian_derma (user=sa)
 2026-09-11 18:57:31 | INFO    | [连接目标] SQL Server 连接成功 (CommandTimeout=0)
@@ -486,3 +486,167 @@ RuntimeError: 目标表不存在: [dbo].[PF临时出院数据26A]。请先执行
 2026-09-11 19:07:53 | INFO    | [同步汇总] 全部表同步成功
 2026-09-11 19:07:53 | INFO    | [总耗时] 621.8 秒 (10.4 分钟)
 2026-09-11 19:07:53 | INFO    | [完成时间] 2026-09-11 19:07:53
+2026-09-24 15:28:29 | INFO    | 
+2026-09-24 15:28:29 | INFO    | ######################################################################################
+2026-09-24 15:28:29 | INFO    | # 大连市皮肤病医院绩效测算 - Oracle -> SQL Server 数据同步
+2026-09-24 15:28:29 | INFO    | # 启动时间: 2026-09-24 15:28:29
+2026-09-24 15:28:29 | INFO    | # Python  : 3.14.5
+2026-09-24 15:28:29 | INFO    | ######################################################################################
+2026-09-24 15:28:29 | INFO    | [运行配置] 源端 Oracle  : 127.0.0.1:1521/xepdb1 (schema=DL_PFM)
+2026-09-24 15:28:29 | INFO    | [运行配置] 目标 SQLServer: 127.0.0.1,1433/hospital_performance_dalian_derma (schema=dbo)
+2026-09-24 15:28:29 | INFO    | [运行配置] ODBC 驱动    : ODBC Driver 17 for SQL Server
+2026-09-24 15:28:29 | INFO    | [运行配置] 批尺寸       : 10000
+2026-09-24 15:28:29 | INFO    | [运行配置] 幂等清空     : 启用
+2026-09-24 15:28:29 | INFO    | [运行配置] 快速批量     : 启用
+2026-09-24 15:28:29 | INFO    | [运行配置] 日志文件     : D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.log
+2026-09-24 15:28:29 | INFO    | [连接源端] Oracle 127.0.0.1:1521/xepdb1 (user=system, schema=DL_PFM)
+2026-09-24 15:28:50 | ERROR   | [致命异常] 同步流程中断: DPY-6005: cannot connect to database (CONNECTION_ID=P3AXydFv2BI3TLqiUwjJPQ==).
+timed out
+Traceback (most recent call last):
+  File "src/oracledb/impl/thin/connection.pyx", line 421, in oracledb.thin_impl.ThinConnImpl._connect_with_address
+  File "src/oracledb/impl/thin/protocol.pyx", line 268, in oracledb.thin_impl.Protocol._connect_phase_one
+  File "src/oracledb/impl/thin/protocol.pyx", line 402, in oracledb.thin_impl.Protocol._connect_tcp
+  File "C:\Python314\Lib\socket.py", line 874, in create_connection
+    raise exceptions[0]
+  File "C:\Python314\Lib\socket.py", line 859, in create_connection
+    sock.connect(sa)
+    ~~~~~~~~~~~~^^^^
+TimeoutError: timed out
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.py", line 1093, in run
+    with OracleToSqlServerSyncer(cfg, logger) as active_syncer:
+         ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.py", line 635, in __enter__
+    self._open_oracle()
+    ~~~~~~~~~~~~~~~~~^^
+  File "D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.py", line 662, in _open_oracle
+    self._ora_conn = oracledb.connect(
+                     ~~~~~~~~~~~~~~~~^
+        user=self._cfg.oracle_user,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        password=self._cfg.oracle_password,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        dsn=self._cfg.oracle_dsn,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\tujia\AppData\Roaming\Python\Python314\site-packages\oracledb\connection.py", line 1768, in connect
+    return conn_class(dsn=dsn, pool=pool, params=params, **kwargs)
+  File "C:\Users\tujia\AppData\Roaming\Python\Python314\site-packages\oracledb\connection.py", line 892, in __init__
+    impl.connect(params_impl)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "src/oracledb/impl/thin/connection.pyx", line 544, in oracledb.thin_impl.ThinConnImpl.connect
+  File "src/oracledb/impl/thin/connection.pyx", line 540, in oracledb.thin_impl.ThinConnImpl.connect
+  File "src/oracledb/impl/thin/connection.pyx", line 482, in oracledb.thin_impl.ThinConnImpl._connect_with_params
+  File "src/oracledb/impl/thin/connection.pyx", line 463, in oracledb.thin_impl.ThinConnImpl._connect_with_description
+  File "src/oracledb/impl/thin/connection.pyx", line 425, in oracledb.thin_impl.ThinConnImpl._connect_with_address
+  File "C:\Users\tujia\AppData\Roaming\Python\Python314\site-packages\oracledb\errors.py", line 199, in _raise_err
+    raise error.exc_type(error) from cause
+oracledb.exceptions.OperationalError: DPY-6005: cannot connect to database (CONNECTION_ID=P3AXydFv2BI3TLqiUwjJPQ==).
+timed out
+2026-09-24 15:29:47 | INFO    | 
+2026-09-24 15:29:47 | INFO    | ######################################################################################
+2026-09-24 15:29:47 | INFO    | # 大连市皮肤病医院绩效测算 - Oracle -> SQL Server 数据同步
+2026-09-24 15:29:47 | INFO    | # 启动时间: 2026-09-24 15:29:47
+2026-09-24 15:29:47 | INFO    | # Python  : 3.14.5
+2026-09-24 15:29:47 | INFO    | ######################################################################################
+2026-09-24 15:29:47 | INFO    | [运行配置] 源端 Oracle  : 127.0.0.1:1521/xepdb1 (schema=DL_PFM)
+2026-09-24 15:29:47 | INFO    | [运行配置] 目标 SQLServer: 127.0.0.1,1433/hospital_performance_dalian_derma (schema=dbo)
+2026-09-24 15:29:47 | INFO    | [运行配置] ODBC 驱动    : ODBC Driver 17 for SQL Server
+2026-09-24 15:29:47 | INFO    | [运行配置] 批尺寸       : 10000
+2026-09-24 15:29:47 | INFO    | [运行配置] 幂等清空     : 启用
+2026-09-24 15:29:47 | INFO    | [运行配置] 快速批量     : 启用
+2026-09-24 15:29:47 | INFO    | [运行配置] 日志文件     : D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.log
+2026-09-24 15:29:47 | INFO    | [连接源端] Oracle 127.0.0.1:1521/xepdb1 (user=system, schema=DL_PFM)
+2026-09-24 15:30:07 | ERROR   | [致命异常] 同步流程中断: DPY-6005: cannot connect to database (CONNECTION_ID=9XFWP30arolZgEalz96/Pg==).
+timed out
+Traceback (most recent call last):
+  File "src/oracledb/impl/thin/connection.pyx", line 421, in oracledb.thin_impl.ThinConnImpl._connect_with_address
+  File "src/oracledb/impl/thin/protocol.pyx", line 268, in oracledb.thin_impl.Protocol._connect_phase_one
+  File "src/oracledb/impl/thin/protocol.pyx", line 402, in oracledb.thin_impl.Protocol._connect_tcp
+  File "C:\Python314\Lib\socket.py", line 874, in create_connection
+    raise exceptions[0]
+  File "C:\Python314\Lib\socket.py", line 859, in create_connection
+    sock.connect(sa)
+    ~~~~~~~~~~~~^^^^
+TimeoutError: timed out
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.py", line 1093, in run
+    with OracleToSqlServerSyncer(cfg, logger) as active_syncer:
+         ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.py", line 635, in __enter__
+    self._open_oracle()
+    ~~~~~~~~~~~~~~~~~^^
+  File "D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.py", line 662, in _open_oracle
+    self._ora_conn = oracledb.connect(
+                     ~~~~~~~~~~~~~~~~^
+        user=self._cfg.oracle_user,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        password=self._cfg.oracle_password,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        dsn=self._cfg.oracle_dsn,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\tujia\AppData\Roaming\Python\Python314\site-packages\oracledb\connection.py", line 1768, in connect
+    return conn_class(dsn=dsn, pool=pool, params=params, **kwargs)
+  File "C:\Users\tujia\AppData\Roaming\Python\Python314\site-packages\oracledb\connection.py", line 892, in __init__
+    impl.connect(params_impl)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "src/oracledb/impl/thin/connection.pyx", line 544, in oracledb.thin_impl.ThinConnImpl.connect
+  File "src/oracledb/impl/thin/connection.pyx", line 540, in oracledb.thin_impl.ThinConnImpl.connect
+  File "src/oracledb/impl/thin/connection.pyx", line 482, in oracledb.thin_impl.ThinConnImpl._connect_with_params
+  File "src/oracledb/impl/thin/connection.pyx", line 463, in oracledb.thin_impl.ThinConnImpl._connect_with_description
+  File "src/oracledb/impl/thin/connection.pyx", line 425, in oracledb.thin_impl.ThinConnImpl._connect_with_address
+  File "C:\Users\tujia\AppData\Roaming\Python\Python314\site-packages\oracledb\errors.py", line 199, in _raise_err
+    raise error.exc_type(error) from cause
+oracledb.exceptions.OperationalError: DPY-6005: cannot connect to database (CONNECTION_ID=9XFWP30arolZgEalz96/Pg==).
+timed out
+2026-09-24 15:31:05 | INFO    | 
+2026-09-24 15:31:05 | INFO    | ######################################################################################
+2026-09-24 15:31:05 | INFO    | # 大连市皮肤病医院绩效测算 - Oracle -> SQL Server 数据同步
+2026-09-24 15:31:05 | INFO    | # 启动时间: 2026-09-24 15:31:05
+2026-09-24 15:31:05 | INFO    | # Python  : 3.14.5
+2026-09-24 15:31:05 | INFO    | ######################################################################################
+2026-09-24 15:31:05 | INFO    | [运行配置] 源端 Oracle  : 127.0.0.1:1521/xepdb1 (schema=DL_PFM)
+2026-09-24 15:31:05 | INFO    | [运行配置] 目标 SQLServer: 127.0.0.1,1433/hospital_performance_dalian_derma (schema=dbo)
+2026-09-24 15:31:05 | INFO    | [运行配置] ODBC 驱动    : ODBC Driver 17 for SQL Server
+2026-09-24 15:31:05 | INFO    | [运行配置] 批尺寸       : 10000
+2026-09-24 15:31:05 | INFO    | [运行配置] 幂等清空     : 启用
+2026-09-24 15:31:05 | INFO    | [运行配置] 快速批量     : 启用
+2026-09-24 15:31:05 | INFO    | [运行配置] 日志文件     : D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.log
+2026-09-24 15:31:05 | INFO    | [连接源端] Oracle 127.0.0.1:1521/xepdb1 (user=system, schema=DL_PFM)
+2026-09-24 15:31:05 | INFO    | [连接源端] Oracle 连接成功
+2026-09-24 15:31:05 | INFO    | [连接目标] SQL Server 127.0.0.1,1433/hospital_performance_dalian_derma (user=sa)
+2026-09-24 15:31:05 | INFO    | [连接目标] SQL Server 连接成功 (CommandTimeout=0)
+2026-09-24 15:31:05 | INFO    | --------------------------------------------------------------------------------------
+2026-09-24 15:31:05 | INFO    | [契约校验] 核对目标表结构与列定义
+2026-09-24 15:31:05 | INFO    |   [OK] PF临时出院数据26A 列数=4 契约一致
+2026-09-24 15:31:05 | INFO    |   [OK] PF临时收入院数据26A 列数=13 契约一致
+2026-09-24 15:31:05 | ERROR   | [致命异常] 同步流程中断: 目标表 [PF临时医疗服务项目26A] 列契约不一致。
+  期望列: ['项目大类', '项目代码', '项目名称', '开单科室代码', '开单科室', '开单人员代码', '开单人', '开单时间', '执行科室代码', '执行科室', '执行人员代码', '执行人员', '执行时间', '数量', '单价', '金额', '缴费时间', '患者ID', '挂号ID', 'HIS主键', '来源']
+  实际列: ['项目大类', '项目代码', '项目名称', '开单科室代码', '开单科室', '开单人员代码', '开单人', '开单时间', '执行科室代码', '执行科室', '执行人员代码', '执行人员', '执行时间', '数量', '单价', '金额', '缴费时间', '患者ID', '挂号ID', 'HIS主键', '接诊时间', '完成时间', '挂号发生时间', '费用性质', '来源']
+  缺失列: []
+  多余列: ['接诊时间', '完成时间', '挂号发生时间', '费用性质']
+Traceback (most recent call last):
+  File "D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.py", line 1093, in run
+    with OracleToSqlServerSyncer(cfg, logger) as active_syncer:
+         ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.py", line 637, in __enter__
+    self._validate_target_tables()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_oracle_to_sqlserver.py", line 752, in _validate_target_tables
+    raise RuntimeError(
+    ...<5 lines>...
+    )
+RuntimeError: 目标表 [PF临时医疗服务项目26A] 列契约不一致。
+  期望列: ['项目大类', '项目代码', '项目名称', '开单科室代码', '开单科室', '开单人员代码', '开单人', '开单时间', '执行科室代码', '执行科室', '执行人员代码', '执行人员', '执行时间', '数量', '单价', '金额', '缴费时间', '患者ID', '挂号ID', 'HIS主键', '来源']
+  实际列: ['项目大类', '项目代码', '项目名称', '开单科室代码', '开单科室', '开单人员代码', '开单人', '开单时间', '执行科室代码', '执行科室', '执行人员代码', '执行人员', '执行时间', '数量', '单价', '金额', '缴费时间', '患者ID', '挂号ID', 'HIS主键', '接诊时间', '完成时间', '挂号发生时间', '费用性质', '来源']
+  缺失列: []
+  多余列: ['接诊时间', '完成时间', '挂号发生时间', '费用性质']

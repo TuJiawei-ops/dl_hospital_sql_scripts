@@ -4,7 +4,7 @@
  Source Server         : 本地Oracle
  Source Server Type    : Oracle
  Source Server Version : 210000 (Oracle Database 21c Express Edition Release 21.0.0.0.0 - Production)
- Source Host           : 192.168.130.32:1521
+ Source Host           : 127.0.0.1:1521
  Source Schema         : DL_PFM
 
  Target Server Type    : Oracle

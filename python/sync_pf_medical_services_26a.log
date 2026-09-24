@@ -4,14 +4,14 @@
 2026-09-18 14:24:04 | INFO    | # 启动时间: 2026-09-18 14:24:04
 2026-09-18 14:24:04 | INFO    | # Python  : 3.14.5
 2026-09-18 14:24:04 | INFO    | ######################################################################################
-2026-09-18 14:24:04 | INFO    | [运行配置] 源端 Oracle  : 192.168.130.32:1521/xepdb1 (schema=DL_PFM)
+2026-09-18 14:24:04 | INFO    | [运行配置] 源端 Oracle  : 127.0.0.1:1521/xepdb1 (schema=DL_PFM)
 2026-09-18 14:24:04 | INFO    | [运行配置] 目标 SQLServer: 127.0.0.1,1433/hospital_performance_dalian_derma (schema=dbo)
 2026-09-18 14:24:04 | INFO    | [运行配置] ODBC 驱动    : ODBC Driver 17 for SQL Server
 2026-09-18 14:24:04 | INFO    | [运行配置] 批尺寸       : 10000
 2026-09-18 14:24:04 | INFO    | [运行配置] 幂等清空     : 启用
 2026-09-18 14:24:04 | INFO    | [运行配置] 快速批量     : 启用
 2026-09-18 14:24:04 | INFO    | [运行配置] 日志文件     : D:\工作\20251116_大连市皮肤病医院绩效\大连市皮肤病医院绩效测算SQL\python\sync_pf_medical_services_26a.log
-2026-09-18 14:24:04 | INFO    | [连接源端] Oracle 192.168.130.32:1521/xepdb1 (user=system, schema=DL_PFM)
+2026-09-18 14:24:04 | INFO    | [连接源端] Oracle 127.0.0.1:1521/xepdb1 (user=system, schema=DL_PFM)
 2026-09-18 14:24:05 | INFO    | [连接源端] Oracle 连接成功
 2026-09-18 14:24:05 | INFO    | [连接目标] SQL Server 127.0.0.1,1433/hospital_performance_dalian_derma (user=sa)
 2026-09-18 14:24:05 | INFO    | [连接目标] SQL Server 连接成功 (CommandTimeout=0)
