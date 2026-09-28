@@ -103,7 +103,7 @@ fact_raw AS (
         a.[开单科室]                                   AS DEPT_NAME,
         -- HIS 科室编码：字典层原值直连，作为拉链维表关联键
         b.[HIS_DEPT_CODE],
-        a.[执行时间]                                   AS ORDER_TIME,
+        a.[开单时间]                                   AS ORDER_TIME,
         CAST(a.[数量]  AS DECIMAL(18,8))               AS QTY,
         CAST(a.[单价]  AS DECIMAL(18,8))               AS UNIT_PRICE,
         CAST(a.[金额]  AS DECIMAL(18,8))               AS AMOUNT
