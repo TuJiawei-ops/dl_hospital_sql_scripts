@@ -34,6 +34,7 @@
      JSON 过程仓追加单层嵌套 [RVU配置快照] 节点，留存维度行完整血缘（版本/机构/计费单位/审计人等）。
 
   修改日志：
+  2026-09-28 12:00:00 | 人员类别扩展 | dept_unit_mapping CTE 中 PERFORM_PERSON_TYPE_CODE 过滤条件由等于 '1001' 扩展为 IN ('1001', '1021', '1005')，确保收款室、方便门诊等行后与其它序列科室映射关系正常生效。
   2026-09-20 10:20:00 | 字段格式化 | 第二区块 CTE_DWD_READ_ALIAS 中 [CREATE_TIME] 字段补齐 CONVERT(VARCHAR(19), ..., 120) 显式文本化转换，确保接口读取格式统一（ISO 8601 yyyy-mm-dd hh:mi:ss）；生效范围：仅第 352 行读取块投影表达式，第一区块落库物理列 SYSDATETIME() 原生 DATETIME2、CTE 列投影、JSON 快照、占位符与 ~ 分隔符零改动。
   2026-09-19 17:20:00 | 剔除条件变更 | dim_version_scope CTE 绩效大类剔除集合由 ('1101', '1041') 变更为 ('1101', '1043')，头部业务说明同步更新为「剔除绩效大类: 1101(出入院服务类)、1043(门诊诊察类)」；生效范围：仅第 161 行 WHERE 过滤条件与第 6 行头部说明文本，CTE 列投影、下游 joined/final、JSON 快照、Envelope 双区块与全部占位符逻辑零改动。
   2026-09-18 14:00:00 | 逻辑纠偏 | 彻底剥离 dept_unit_mapping 的 VERSION_RANK 开窗去重逻辑，恢复 sjjk_DEPT_UNIT_MAPPING_2025_11_27 物理映射表的原始颗粒度与预期笛卡尔积。
@@ -130,7 +131,7 @@ dept_unit_mapping AS (
         m.[START_DATE],
         m.[END_DATE]
     FROM dbo.[sjjk_DEPT_UNIT_MAPPING_2025_11_27] AS m WITH (NOLOCK)
-    WHERE m.[PERFORM_PERSON_TYPE_CODE] = '1001'
+    WHERE m.[PERFORM_PERSON_TYPE_CODE] IN ('1001', '1021', '1005')
 ),
 
 -- ── Import CTE: 绩效大类维表作用域（全字段 1:1 直连，大类剔除前置剪枝；[ID] 别名 RVU_ID 防与日志表主键碰撞） ──
