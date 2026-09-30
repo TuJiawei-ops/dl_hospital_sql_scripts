@@ -32,6 +32,7 @@
   {struct_codes}: 核算单元过滤集 (如 ('10001', '10002'))
 
   修改日志：
+  2026-09-30 00:00:00 | 时间维度变更 | 依据2026-09-30需求变更，取消按来源分流，门诊与非门诊统一下沉至 a.[缴费时间] 闭区间筛选。
   2026-09-20 15:10:00 | 角色扩展 | 医技护解包逻辑追加第四类【临床】核算单元角色映射，与 sqlserver/DIM_DEPT_ITEM_EXEC_RATIO.sql 新增的 CLINICAL_EXEC_RATIO / CLINICAL_HPS_DEPT_CODE / CLINICAL_HPS_DEPT_NAME 三列完成消费链路对接。具体落点：dim_exec_ratio_raw 追加 r.[CLINICAL_EXEC_RATIO] / r.[CLINICAL_HPS_DEPT_CODE] / r.[CLINICAL_HPS_DEPT_NAME] 三列投影；joined 追加 ISNULL(x.[CLINICAL_EXEC_RATIO], CAST(0.00000000 AS DECIMAL(18,8))) AS CLINICAL_EXEC_RATIO 与 x.[CLINICAL_HPS_DEPT_CODE] / x.[CLINICAL_HPS_DEPT_NAME] 投影（NULL 兜底 0 与既有医技护三路口径完全一致）；cte_role_unpivot 的 CROSS APPLY (VALUES ...) 数组末尾追加 ('临床', j.[CLINICAL_EXEC_RATIO], j.[CLINICAL_HPS_DEPT_CODE], j.[CLINICAL_HPS_DEPT_NAME]) 行项，VALUES 四列间距对齐重排。上游过滤（IS_ENABLED = 1 / 绩效大类剔除 / 时间窗口）、积分公式（数量 × RVU × 执行系数 × 执行比例）、GROUP BY 结构、下游 final CTE、JSON 快照、Envelope 双区块与全部占位符零改动。既有过滤链 u.[EXEC_RATIO] > 0 AND u.[HPS_DEPT_CODE] IS NOT NULL 天然覆盖临床行项：未配置临床规则时 EXEC_RATIO 兜底 0 被短路剔除，零副作用。
   2026-09-20 12:20:00 | 算法规则变更 | 医疗服务项目执行积分逻辑追加 DIM_PRF_ITEM_RVU_VERSION.EXEC_COFF（执行系数）乘积项，同步更新 cte_role_unpivot 积分汇总公式、final 综合执行比例反推逻辑、三段式审计文本 CALC_PROCESS_TEXT 及 JSON 快照。生效范围：joined 追加 ISNULL(EXEC_COFF, 1.00000000) 投影；cte_role_unpivot 增列 j.[EXEC_COFF] 并同步 GROUP BY、TOTAL_EXEC_POINTS 由「数量 × RVU × 执行比例」升级为「数量 × RVU × 执行系数 × 执行比例」；final 透传 EXEC_COFF、EXEC_RATIO 反推分母追加 r.[EXEC_COFF]、审计文本中文逻辑公式段与数学代入段同步补乘执行系数；CALC_DETAIL_JSON 扁平节点在 [单项RVU点数] 下方追加 CAST(f.[EXEC_COFF] AS DECIMAL(18,8)) AS [执行系数]。落库物理列、DWD_FIN_CALC_ALLOC1_DETAIL_LOG 表结构、RVU 嵌套快照、第二区块接口读取块与全部模板占位符（{year}/{month}/{start_time}/{end_time}/{struct_codes}）零改动。
   2026-09-20 10:20:00 | 字段格式化 | 第二区块 CTE_DWD_READ_ALIAS 中 [CREATE_TIME] 字段补齐 CONVERT(VARCHAR(19), ..., 120) 显式文本化转换，确保接口读取格式统一（ISO 8601 yyyy-mm-dd hh:mi:ss）；生效范围：仅第 344 行读取块投影表达式，第一区块落库物理列 SYSDATETIME() 原生 DATETIME2、CTE 列投影、JSON 快照、占位符与 ~ 分隔符零改动。
@@ -83,10 +84,8 @@ fact_raw AS (
     INNER JOIN dept_dict AS d
         ON a.[执行科室代码] = d.[DEPT_ID]
     WHERE 1=1
-      AND (
-          (a.[来源] = N'门诊' AND a.[缴费时间] >= CAST('{start_time}' AS DATETIME) AND a.[缴费时间] <= CAST('{end_time}' AS DATETIME))
-          OR (ISNULL(a.[来源], '') <> N'门诊' AND a.[执行时间] >= CAST('{start_time}' AS DATETIME) AND a.[执行时间] <= CAST('{end_time}' AS DATETIME))
-      )
+      AND a.[缴费时间] >= CAST('{start_time}' AS DATETIME)
+      AND a.[缴费时间] <= CAST('{end_time}' AS DATETIME)
     GROUP BY
         a.[项目代码],
         a.[项目名称],
