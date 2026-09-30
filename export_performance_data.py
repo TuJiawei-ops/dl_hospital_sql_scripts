@@ -26,11 +26,13 @@
  输出目录 : ./{TIMESTAMP}_大连市皮肤病医院绩效核算/
  文件命名 : {TIMESTAMP}_<任务中文名>.csv  (与目录时间戳同源, 全局一致)
  CSV 编码 : utf-8-sig (UTF-8 带 BOM, 保障 Excel 双击直开不乱码)
+ 单元格格式: 编码/日期等文本语义列逐值包裹 ="VALUE", Excel 打开即锁定为文本,
+           杜绝前导零丢失 (0101 → 1) 与长数字串科学计数法失真; 数值列裸输出。
 
  关键技术决策
  ------------
  1. 【只读声明】全部 7 项任务均为纯只读 SELECT, 零 INSERT / UPDATE / DELETE /
-    TRUNCATE / DDL 副作用, 对生产库绝对零写入。
+     TRUNCATE / DDL 副作用, 对生产库绝对零写入。
  2. 【占位符零注入】任务 1 的 SQL 不含 '{year}' / '{month}' / {struct_codes} 等
     模板占位符 (业务全量透视视图), 故本脚本无需任何参数替换动作, 直接整段执行;
     若未来该 SQL 引入占位符, 须在此处同步补齐替换逻辑, 严禁静默失败。
@@ -41,6 +43,12 @@
     不引入 pandas 一次性载入 (一次分配明细可达百万行量级)。
  5. 【编码隔离】SQL 文本与 CSV 写入统一显式 UTF-8 处理, 杜绝驱动层 GBK 转码
     造成的中文乱码; 连接串携带 TrustServerCertificate=yes 兼容自签证书。
+ 6. 【Excel 文本锁定】CSV 无类型元数据, Excel 按首行值嗅探类型, 导致 '0101'
+    降维成 1、长编码串科学计数化。故按「数据库原始列名」(非 CSV 中文列头)
+    判定文本列位掩码, 命中 CODE/NO/DATE/TIME/ID/YEAR/MONTH 或中文键 (编码/
+    工号/日期/年份/月份...) 的列, 逐值包裹 ="VALUE" excel 公式强制文本;
+    纯数值型值一律裸输出, 保持原生可计算性; 该方案在「双击直接打开」路径下
+    即生效 (零 VBA、零二次另存), 故不采用制表符前缀兼容方案。
 
  依赖
  ----
@@ -52,6 +60,7 @@
 
  修改日志：
  2026-09-19 12:00:00 | 脚本新建 | 建立 7 项绩效核算基础数据 CSV 批量导出管道：pyodbc 流式游标 + csv.writer 逐行写出, 全局统一 TIMESTAMP(YYYYMMDD_HHMMSS) 字符串贯穿目录与文件名; 任务 1 直读 analyses/01_报表_一次分配明细业务视图.sql 纯 SELECT 内容执行, 任务 2~7 按 DDL 声明顺序显式列清单 + 中文别名映射导出; 输出 utf-8-sig 带 BOM, 保障 Excel 直开无乱码; 含逐任务错误处理、部分失败容错与连接物理清理动作。
+ 2026-09-30 10:00:00 | 增量修补 | 新增 Excel 显式文本锁定: 按数据库原始列名 (CODE/NO/DATE/TIME/ID/YEAR/MONTH + 中文键 编码/工号/日期/年份/月份) 构造 text_flags 位掩码, 逐值包裹 ="VALUE" 强制文本, 根治前导零丢失与科学计数法; 新增 _looks_numeric / is_text_lock_column / build_text_column_flags / format_text_cell / row_to_csv_record 模块级辅助函数; _write_csv 增补 text_flags 形参并以生成器逐行包裹保障 fetchmany 流式内存安全; 数值列裸输出保持可计算性。
 =================================================================================
 """
 
@@ -64,6 +73,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -113,9 +123,103 @@ TASK1_SQL_RELATIVE_PATH: str = "analyses/01_报表_一次分配明细业务视�
 # 任务 7 的 DDL 出处 (仅作文档溯源, 实际取数走数据库实体 dbo.DIM_WORK_CALENDAR)
 TASK7_DDL_RELATIVE_PATH: str = "sqlserver/20260915_create_dim_work_calendar.sql"
 
+# Excel 显式文本锁定: 命中以下关键字的列 (忽略大小写) 逐值包裹为 ="VALUE"
+# 判定依据为「数据库游标原始列名」, 故任务 1 的中文列头场景亦能命中 (中文键覆盖)。
+TEXT_LOCK_ASCII_KEYWORDS: Tuple[str, ...] = ("CODE", "NO", "DATE", "TIME", "ID", "YEAR", "MONTH")
+TEXT_LOCK_CJK_KEYWORDS: Tuple[str, ...] = (
+    "编码", "代码", "工号", "日期", "年份", "月份", "时间", "编号",
+)
+
 
 # ---------------------------------------------------------------------------------
-# 1. 列映射契约 (Column Mapping Contract)
+# 1. Excel 显式文本锁定 (Explicit Text Locking)
+# ---------------------------------------------------------------------------------
+
+
+def _looks_numeric(value: object) -> bool:
+    """
+    判断值是否为「纯数值语义」类型 (数值列裸输出, 严禁包裹为文本公式)。
+
+    说明: 工具仅做类型分类, 不改变数值本身; bool 为 int 子类故显式前置排除。
+    """
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return True
+    if isinstance(value, Decimal):
+        return True
+    return False
+
+
+def is_text_lock_column(column_name: str) -> bool:
+    """
+    判定列是否需做 Excel 显式文本锁定。
+
+    规则: 列名含 CODE / NO / DATE / TIME / ID / YEAR / MONTH (忽略大小写),
+          或含中文文本语义键 (编码 / 工号 / 日期 / 年份 / 月份 ...)。
+    """
+    name = (column_name or "").strip()
+    if not name:
+        return False
+    upper = name.upper()
+    if any(kw in upper for kw in TEXT_LOCK_ASCII_KEYWORDS):
+        return True
+    return any(kw in name for kw in TEXT_LOCK_CJK_KEYWORDS)
+
+
+def build_text_column_flags(db_header: Sequence[str]) -> List[bool]:
+    """
+    依数据库原始列名序列构造逐列「强制文本」位掩码。
+
+    先判列名关键字 (CODE/NO/DATE/... ), 再对未命中的列回退按值类型判定,
+    保证纯文本列 (如调用方新增的字符串列) 同样受到保护。
+    """
+    return [is_text_lock_column(col) for col in db_header]
+
+
+def format_text_cell(value: object) -> str:
+    """
+    将单元格值包裹为 Excel 强制文本公式形态 f'="{value}"'。
+
+    参数
+    ----
+    value : 原始单元格值 (datetime 已在上游统一文本化)
+
+    返回
+    ----
+    str: 非 None 值返回 ="VALUE"; None 返回空串 (避免生成 ="None" 脏值)
+    """
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return f'="{value.strftime("%Y-%m-%d %H:%M:%S")}"'
+    if isinstance(value, Decimal):
+        return f'="{format(value, "f")}"'
+    return f'="{value}"'
+
+
+def row_to_csv_record(row: Sequence[object], text_flags: Sequence[bool]) -> List[object]:
+    """
+    将单行数据库记录转换为 CSV 物理记录 (文本列锁定 + 数值列裸输出)。
+
+    逐行生成, 不缓存整批转换结果, 流式内存语义与 fetchmany 批尺寸严格对齐。
+    """
+    cells: List[object] = list(row)
+    for idx, flag in enumerate(text_flags):
+        if not flag or idx >= len(cells):
+            continue
+        cell = cells[idx]
+        if cell is None:
+            continue
+        # 数值型列名恰含 ID/NO 等关键字时 (如计数列 NO_CNT), 保持原生数值可计算性
+        if not isinstance(cell, str) and _looks_numeric(cell):
+            continue
+        cells[idx] = format_text_cell(cell)
+    return cells
+
+
+# ---------------------------------------------------------------------------------
+# 2. 列映射契约 (Column Mapping Contract)
 # ---------------------------------------------------------------------------------
 # 说明: dict 在 Python 3.7+ 保证插入顺序, 故其键序即为 CSV 物理列序与 DDL 声明序。
 
@@ -267,7 +371,7 @@ WORK_CALENDAR_COLS: Dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------------
-# 2. 导出任务契约 (Export Task Contract)
+# 3. 导出任务契约 (Export Task Contract)
 # ---------------------------------------------------------------------------------
 
 
@@ -350,7 +454,7 @@ class ExportTask:
 
 
 # ---------------------------------------------------------------------------------
-# 3. 工具函数: SQL 文件装载与文本清洗
+# 4. 工具函数: SQL 文件装载与文本清洗
 # ---------------------------------------------------------------------------------
 
 # 行注释 (-- ...) 与块注释 (/* ... */) 清理正则; 采用 re.DOTALL 支持跨行块注释
@@ -425,7 +529,7 @@ def load_select_sql_from_file(relative_path: str) -> str:
 
 
 # ---------------------------------------------------------------------------------
-# 4. 数据库连接配置 (Connection Config)
+# 5. 数据库连接配置 (Connection Config)
 # ---------------------------------------------------------------------------------
 
 
@@ -479,7 +583,7 @@ class DbConfig:
 
 
 # ---------------------------------------------------------------------------------
-# 5. 日志装配 (Logging Setup)
+# 6. 日志装配 (Logging Setup)
 # ---------------------------------------------------------------------------------
 
 LOG_FORMAT: str = "[%(asctime)s] [%(levelname)-7s] %(message)s"
@@ -511,7 +615,7 @@ def setup_console_logger() -> logging.Logger:
 
 
 # ---------------------------------------------------------------------------------
-# 6. 任务清单装配 (Task Registry)
+# 7. 任务清单装配 (Task Registry)
 # ---------------------------------------------------------------------------------
 
 
@@ -584,7 +688,7 @@ def build_export_tasks() -> List[ExportTask]:
 
 
 # ---------------------------------------------------------------------------------
-# 7. 导出结果契约 (Export Result Contract)
+# 8. 导出结果契约 (Export Result Contract)
 # ---------------------------------------------------------------------------------
 
 
@@ -602,7 +706,7 @@ class TaskResult:
 
 
 # ---------------------------------------------------------------------------------
-# 8. 导出引擎 (Export Engine)
+# 9. 导出引擎 (Export Engine)
 # ---------------------------------------------------------------------------------
 
 
@@ -705,7 +809,10 @@ class PerformanceDataExporter:
                 db_header = [col[0] for col in cursor.description]
                 csv_header = task.build_csv_header(db_header)
 
-                rows = self._write_csv(cursor, csv_header, csv_path)
+                # 文本列位掩码按「数据库原始列名」判定, 保证任务 1 中文列头场景同样命中
+                text_flags = build_text_column_flags(db_header)
+
+                rows = self._write_csv(cursor, csv_header, csv_path, text_flags)
 
             result.rows = rows
             result.status = "SUCCESS"
@@ -731,19 +838,33 @@ class PerformanceDataExporter:
 
         return result
 
-    def _write_csv(self, cursor: pyodbc.Cursor, header: Sequence[str], csv_path: Path) -> int:
+    def _write_csv(
+        self,
+        cursor: pyodbc.Cursor,
+        header: Sequence[str],
+        csv_path: Path,
+        text_flags: Sequence[bool],
+    ) -> int:
         """
-        流式将游标结果写入 CSV (utf-8-sig 带 BOM)。
+        流式将游标结果写入 CSV (utf-8-sig 带 BOM), 并对文本属性列做 Excel 显式文本锁定。
 
         参数
         ----
-        cursor   : 已执行且带结果集的游标
-        header   : CSV 列头 (中文别名或透传列名)
-        csv_path : 目标 CSV 物理路径
+        cursor     : 已执行且带结果集的游标
+        header     : CSV 列头 (中文别名或透传列名)
+        csv_path   : 目标 CSV 物理路径
+        text_flags : 逐列「强制文本」位掩码 (True 的列包裹为 ="VALUE", False 的列裸输出)
 
         返回
         ----
         int: 实际写出行数 (不含表头)
+
+        说明
+        ----
+        Excel 不会从 CSV 列头推断类型, 而按首行值做类型嗅探: "0101" 会被降维成数字 1,
+        超长数字串会被转成科学计数法。故对编码/日期等文本语义列在**每一个数据行**上
+        包裹 ="VALUE" 公式, 由 Excel 引擎强制锁定为文本 (仅打开动作即可生效, 零 VBA)。
+        数值/金额/系数列不做包裹, 保持原生可计算性。
         """
         row_count = 0
         # newline="" 为 csv 模块官方强制要求, 防止 Windows 下产生空行;
@@ -756,7 +877,8 @@ class PerformanceDataExporter:
                 batch = cursor.fetchmany(FETCH_BATCH_SIZE)
                 if not batch:
                     break
-                writer.writerows([tuple(row) for row in batch])
+                # 逐行即时包裹, 不缓存整批转换结果, 内存占用与 FETCH_BATCH_SIZE 成正比
+                writer.writerows(row_to_csv_record(row, text_flags) for row in batch)
                 row_count += len(batch)
 
         return row_count
@@ -809,7 +931,7 @@ class PerformanceDataExporter:
 
 
 # ---------------------------------------------------------------------------------
-# 9. 主流程入口 (Main Entry)
+# 10. 主流程入口 (Main Entry)
 # ---------------------------------------------------------------------------------
 
 
