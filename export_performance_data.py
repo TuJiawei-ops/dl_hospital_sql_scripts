@@ -49,6 +49,13 @@
     工号/日期/年份/月份...) 的列, 逐值包裹 ="VALUE" excel 公式强制文本;
     纯数值型值一律裸输出, 保持原生可计算性; 该方案在「双击直接打开」路径下
     即生效 (零 VBA、零二次另存), 故不采用制表符前缀兼容方案。
+ 7. 【数值十进制展开】浮点/Decimal 经 pyodbc 以原生类型返回, csv.writer 落盘
+    时对极小值与极大值会触发科学计数法 (0E-8 / 0.00E+00 / 1E+5), Excel 打开后
+    失真。故所有数值单元格统一经 format_numeric_value 展开为标准十进制文本:
+    零值归一为 '0'; 非零按源 DECIMAL(18,8) 刻度 quantize 至 8 位小数
+    (与源物理列同精度, 对账零损失); float 经 Decimal(repr(x)) 转换避免二进制
+    舍入二次污染; 超 15 位有效数字的超长值保留源全精度文本, 不截断血缘。
+    该展开产物为「纯数字字符串」, Excel 仍识别为数值可参与计算, 非文本公式。
 
  依赖
  ----
@@ -61,6 +68,7 @@
  修改日志：
  2026-09-19 12:00:00 | 脚本新建 | 建立 7 项绩效核算基础数据 CSV 批量导出管道：pyodbc 流式游标 + csv.writer 逐行写出, 全局统一 TIMESTAMP(YYYYMMDD_HHMMSS) 字符串贯穿目录与文件名; 任务 1 直读 analyses/01_报表_一次分配明细业务视图.sql 纯 SELECT 内容执行, 任务 2~7 按 DDL 声明顺序显式列清单 + 中文别名映射导出; 输出 utf-8-sig 带 BOM, 保障 Excel 直开无乱码; 含逐任务错误处理、部分失败容错与连接物理清理动作。
  2026-09-30 10:00:00 | 增量修补 | 新增 Excel 显式文本锁定: 按数据库原始列名 (CODE/NO/DATE/TIME/ID/YEAR/MONTH + 中文键 编码/工号/日期/年份/月份) 构造 text_flags 位掩码, 逐值包裹 ="VALUE" 强制文本, 根治前导零丢失与科学计数法; 新增 _looks_numeric / is_text_lock_column / build_text_column_flags / format_text_cell / row_to_csv_record 模块级辅助函数; _write_csv 增补 text_flags 形参并以生成器逐行包裹保障 fetchmany 流式内存安全; 数值列裸输出保持可计算性。
+ 2026-09-30 14:00:00 | 增量修补 | 新增数值科学计数法拦截: 新增 is_numeric_like / normalize_decimal / format_numeric_value 数值展开层 (零值归一 '0', 非零按源 DECIMAL(18,8) 刻度 quantize 8 位展开, float 走 Decimal(repr) 防二进制舍入, NaN/Inf 原样字符串化); row_to_csv_record 重构为文本锁定/数值展开两路互斥分流, 字符串永不进入数值嗅探; format_text_cell 的 Decimal 分支复用 format_numeric_value; 新增 NUMERIC_SCALE_DIGITS / EXCEL_NUMERIC_SIGNIFICANT_DIGITS 常量。
 =================================================================================
 """
 
@@ -130,10 +138,80 @@ TEXT_LOCK_CJK_KEYWORDS: Tuple[str, ...] = (
     "编码", "代码", "工号", "日期", "年份", "月份", "时间", "编号",
 )
 
+# Excel 数值精度预算: IEEE754 双精度 15 位有效数字, 超出即触发显示舍入
+EXCEL_NUMERIC_SIGNIFICANT_DIGITS: int = 15
+
+# 金额/系数类数值刻度: 源物理列 (FINAL_VALUE / RVU_VAL / TOTAL_QTY / PERF_COEFF)
+# 统一为 DECIMAL(18,8), 故展开位数按源刻度对齐 8 位, 保障对账零精度损失。
+NUMERIC_SCALE_DIGITS: int = 8
+
+# Decimal 数值格式化 quantize 刻度
+_DECIMAL_SCALE_QUANTUM: Decimal = Decimal(1).scaleb(-NUMERIC_SCALE_DIGITS)
+
 
 # ---------------------------------------------------------------------------------
-# 1. Excel 显式文本锁定 (Explicit Text Locking)
+# 1. Excel 数值展开与文本锁定 (Numeric Expansion & Text Locking)
 # ---------------------------------------------------------------------------------
+
+
+def is_numeric_like(value: object) -> bool:
+    """
+    判定值是否承载「纯数值语义」(bool 为 int 子类故显式排除)。
+
+    说明: 仅供数值展开分支放行, 字符串一律不参与数值嗅探,
+          从根上杜绝编码/工号类数字串被误改精度。
+    """
+    if isinstance(value, bool):
+        return False
+    return isinstance(value, (int, float, Decimal))
+
+
+def normalize_decimal(value: Decimal, scale_digits: int = NUMERIC_SCALE_DIGITS) -> str:
+    """
+    将 Decimal 展开为标准十进制文本, 消除科学计数法 (E+ / E-)。
+
+    策略: 先零值归一 (清 -0 尾数), 再按源刻度 quantize 展开,
+          中途不执行 float() 往返, 杜绝二次二进制舍入。
+    说明: 超长值 (>15 位有效数字) 保留源全精度文本, 不截断业务血缘。
+    """
+    if value.is_zero():
+        value = value.copy_abs()
+    return format(value.quantize(_DECIMAL_SCALE_QUANTUM), "f") if scale_digits else format(value, "f")
+
+
+def format_numeric_value(value: object, scale_digits: int = NUMERIC_SCALE_DIGITS) -> str:
+    """
+    数值格式化唯一入口 (Format Injection): 输出永不含科学计数法的十进制文本。
+
+    参数
+    ----
+    value        : int / float / Decimal 数值
+    scale_digits : 展开小数位 (默认对齐源 DECIMAL(18,8) 刻度)
+
+    返回
+    ----
+    str: 标准十进制文本; 非数值或非有限值 (NaN / Inf) 原样字符串化
+    """
+    try:
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, Decimal):
+            return normalize_decimal(value, scale_digits)
+        if isinstance(value, float):
+            if value != value or value in (float("inf"), float("-inf")):
+                return str(value)
+            if value == 0.0:
+                return "0"
+            # float 转 Decimal 的取源策略 (绕开 E 记号与超长拒绝):
+            #   1) 整数值且超双精度有效位 -> 走整数精确路径, 杜绝 1e+21 类 E 记号;
+            #   2) 其余 -> 以 repr(x) 的 17 位有效数字为源, Decimal 不设位数开关,
+            #      仅由 format(x, 'f') 完成十进制展开 (自身不产生 E 记号)。
+            if value.is_integer() and abs(value) >= 1e16:
+                return format(Decimal(int(value)), "f")
+            return normalize_decimal(Decimal(repr(value)), scale_digits)
+    except (ArithmeticError, ValueError):                    # pragma: no cover - 防御性
+        return str(value)
+    return str(value)
 
 
 def _looks_numeric(value: object) -> bool:
@@ -194,27 +272,31 @@ def format_text_cell(value: object) -> str:
     if isinstance(value, datetime):
         return f'="{value.strftime("%Y-%m-%d %H:%M:%S")}"'
     if isinstance(value, Decimal):
-        return f'="{format(value, "f")}"'
+        return f'="{format_numeric_value(value)}"'
     return f'="{value}"'
 
 
 def row_to_csv_record(row: Sequence[object], text_flags: Sequence[bool]) -> List[object]:
     """
-    将单行数据库记录转换为 CSV 物理记录 (文本列锁定 + 数值列裸输出)。
+    将单行数据库记录转换为 CSV 物理记录 (文本列锁定 + 数值十进制展开)。
 
     逐行生成, 不缓存整批转换结果, 流式内存语义与 fetchmany 批尺寸严格对齐。
+    两路互斥分流: 文本列走 ="VALUE" 锁定分支, 数值列走十进制展开分支,
+    编码/工号类数字串永不进入数值嗅探路径。
     """
     cells: List[object] = list(row)
-    for idx, flag in enumerate(text_flags):
-        if not flag or idx >= len(cells):
-            continue
-        cell = cells[idx]
-        if cell is None:
-            continue
-        # 数值型列名恰含 ID/NO 等关键字时 (如计数列 NO_CNT), 保持原生数值可计算性
-        if not isinstance(cell, str) and _looks_numeric(cell):
-            continue
-        cells[idx] = format_text_cell(cell)
+    for idx, cell in enumerate(cells):
+        locked = idx < len(text_flags) and text_flags[idx]
+        if locked:
+            if cell is None:
+                cells[idx] = ""                      # 文本锁定列 NULL 落为空单元格, 严禁漏出 'None'
+            elif not isinstance(cell, str) and _looks_numeric(cell):
+                # 数值型列名恰含 ID/NO 等关键字时 (如计数列 NO_CNT), 走数值展开保可计算性
+                cells[idx] = format_numeric_value(cell)
+            else:
+                cells[idx] = format_text_cell(cell)
+        elif cell is not None and is_numeric_like(cell):
+            cells[idx] = format_numeric_value(cell)
     return cells
 
 
