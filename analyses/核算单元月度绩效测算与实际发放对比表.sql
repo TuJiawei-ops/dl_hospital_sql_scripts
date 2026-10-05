@@ -9,6 +9,8 @@
             dbo.[ads_emp_monthly_performance_m] 实际发放侧事实（员工月度绩效金额表）
             ──▶ SUM(performance_after_fixed_deduction) 按 (year, month, unit_code) 预汇总
             两路汇总经 FULL OUTER JOIN 拼接，捕捉「仅测算未发放」与「仅发放未测算」断层。
+            dbo.[T_DEPARTMENT]（经 CODE 收敛后左连）──▶ 补全 [所属职系编码] / [所属职系名称]
+
   只读声明: 纯 SELECT 分析报表，彻底剥离 Envelope Pattern（无 DELETE / INSERT / UPDATE /
             波浪号 ~ 区块 / DWD_* 写入逻辑），零 DDL 副作用、零 DML 副作用。
   查询提示: 全链路 WITH (NOLOCK)，只读核对不加锁，避免影响生产事实表写入。
@@ -38,6 +40,19 @@
      防止新增维度污染最外层分组粒度（.clinerules §3 隔离多余维度）。
   6. 【零视图策略】全程 CTE 逻辑隔离，不落地任何 VIEW 对象，规避视图嵌套对
      查询优化器并行执行计划的侵蚀。
+  7. 【阻断级·行倍增防御】补职系属性时若直接 LEFT JOIN dbo.[T_DEPARTMENT]，将因
+     [CODE] 可空且无唯一约束（物理主键为 [ID]，唯一索引建在 [NAME] 上）而命中多行，
+     静默放大结果行数并导致「测算绩效总额 / 实际发放总额」被虚假重复计列。
+     故必须先以 ROW_NUMBER() OVER (PARTITION BY [CODE] ORDER BY [DELETE_FLAG] ASC,
+     [ID] DESC) 显式收敛至 RANK = 1（cte_dept_rank → cte_dept），再与汇总结果集
+     做 1:1 左连。严禁 MAX() 黑箱折叠（.clinerules §6 禁用滥用 MAX/MIN 聚合规则），
+     排序键严禁包含 VERSION_NO（.clinerules §9 零版本寻址法则）。
+     与 analyses/01_报表_一次分配明细业务视图.sql 的部门收敛策略保持全项目一致。
+  8. 【零行丢失保障·职系侧】职系两列走 ISNULL(..., N'') 空串兜底而非 N'未分配职系'：
+     本报表核算单元基数含大量非科室型单元，职系缺失属常态，空串可避免业务侧误读为
+     「未分配职系」的待办事项；如需视觉区分可改为 N'未分配职系'。
+  9. 【排序键扩展】ORDER BY 在原 (核算年份 DESC, 核算月份 DESC) 之后插入
+     [所属职系编码] ASC，形成「先归口职系、再落核算单元」的业务透视层次。
 
   修改日志：
   2026-10-05 03:00:00 | 脚本新建 | 建立核算单元月度绩效测算与实际发放对比报表：
@@ -49,6 +64,13 @@
                                  输出测算绩效总额、实际发放总额、绝对差异金额、差异比例；
                                  纠偏需求文档中 calc_year / calc_month 臆造列名为物理 [year] / [month]；
                                  全链路 NOLOCK 只读，零 GO、零视图、零 DML/DDL 副作用。
+  2026-10-05 17:20:00 | 字段扩展 | 补齐职系属性两列并调整输出列序：新增 cte_dept_rank / cte_dept
+                                 两级部门维表收敛层（ROW_NUMBER 按 [CODE] 分组、[DELETE_FLAG] ASC +
+                                 [ID] DESC 排序取 RANK=1），根治 T_DEPARTMENT.[CODE] 无唯一约束导致的
+                                 LEFT JOIN 行倍增与金额虚假重复计列；final CTE 左连收敛后维表补
+                                 [所属职系编码] / [所属职系名称]（插于核算单元两列之前，ISNULL 空串兜底）；
+                                 ORDER BY 在账期键之后插入 [所属职系编码] ASC；
+                                 双侧预汇总、FULL OUTER JOIN 与除零保护逻辑零改动；输出 10 列。
 ================================================================================ */
 
 WITH cte_calc_summary AS (
@@ -103,11 +125,40 @@ WITH cte_calc_summary AS (
         AND c.[CALC_MONTH] = a.[CALC_MONTH]
         AND c.[UNIT_CODE]  = a.[UNIT_CODE]
 )
+,cte_dept_rank AS (
+    -- ── Logical CTE: 部门维表按 [CODE] 显式收敛，根治 1:N 行倍增（.clinerules §6） ──
+    -- T_DEPARTMENT 物理主键为 [ID]，[CODE] 可空且无唯一约束（唯一索引建在 [NAME] 上），
+    -- 一条 UNIT_CODE 可能命中多行部门记录；若直接 LEFT JOIN 将静默放大结果行数，
+    -- 导致「测算绩效总额 / 实际发放总额」被虚假重复计列。故必须以 ROW_NUMBER 显式排序
+    -- 收敛至 RANK = 1 后左连，严禁 MAX() 黑箱折叠（.clinerules §6 禁用滥用 MAX/MIN）。
+    -- 排序优先级：[DELETE_FLAG] ASC（有效部门优先）→ [ID] DESC（确定性 tie-breaker）
+    SELECT
+        d.[CODE]                                                         AS [CODE]
+       ,d.[series_code]                                                  AS [series_code]
+       ,d.[series_name]                                                  AS [series_name]
+       ,ROW_NUMBER() OVER (
+            PARTITION BY d.[CODE]
+            ORDER BY d.[DELETE_FLAG] ASC, d.[ID] DESC
+        )                                                                AS [RN]
+    FROM dbo.[T_DEPARTMENT] AS d WITH (NOLOCK)
+    WHERE d.[CODE] IS NOT NULL
+)
+,cte_dept AS (
+    -- ── Logical CTE: 仅保留每个 [CODE] 的唯一胜出行，确保与汇总结果集 1:1 关联 ──
+    SELECT
+        r.[CODE]                                                         AS [CODE]
+       ,r.[series_code]                                                  AS [series_code]
+       ,r.[series_name]                                                  AS [series_name]
+    FROM cte_dept_rank AS r
+    WHERE r.[RN] = 1
+)
 ,final AS (
-    -- ── Final CTE: 业务可读中文别名出口，差异指标在聚合层之上单点计算 ──
+    -- ── Final CTE: 业务可读中文别名出口，左连收敛后部门维表补职系属性（1:1，零行倍增） ──
     SELECT
         CAST(j.[CALC_YEAR]  AS NVARCHAR(4))                              AS [核算年份]
        ,CAST(j.[CALC_MONTH] AS NVARCHAR(2))                              AS [核算月份]
+       ,ISNULL(CAST(dept.[series_code] AS NVARCHAR(50)), N'')            AS [所属职系编码]
+       ,ISNULL(CAST(dept.[series_name] AS NVARCHAR(100)), N'')           AS [所属职系名称]
        ,CAST(j.[UNIT_CODE]  AS NVARCHAR(100))                            AS [核算单元编码]
        ,ISNULL(CAST(j.[UNIT_NAME] AS NVARCHAR(200)), N'')                AS [核算单元名称]
        ,CAST(j.[CALC_TOTAL]   AS DECIMAL(18,8))                          AS [测算绩效总额]
@@ -120,11 +171,14 @@ WITH cte_calc_summary AS (
                  ELSE (j.[CALC_TOTAL] - j.[ACTUAL_TOTAL]) / j.[ACTUAL_TOTAL]
              END AS DECIMAL(18,8))                                       AS [差异比例_百分比]
     FROM cte_joined AS j
+    LEFT JOIN cte_dept AS dept
+        ON j.[UNIT_CODE] = dept.[CODE]
 )
 SELECT *
 FROM final
 ORDER BY
     [核算年份] DESC
    ,[核算月份] DESC
+   ,[所属职系编码] ASC
    ,[核算单元编码] ASC;
 
