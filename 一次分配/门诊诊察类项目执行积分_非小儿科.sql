@@ -3,12 +3,15 @@
   脚本名称: 门诊诊察类项目执行积分_非小儿科.sql
   业务说明: 门诊诊察类项目（1043）执行积分持久化（核算单元 × 执行人员 × 项目 × 日期类型 粒度），
             执行科室代码 <> 36 硬隔离（NULL 安全）；学科系数常量 1.0。
-  积分口径: 积分 = 项目点数 × 汇总数量 × 执行系数 × 学科系数(1.0) × 绩效核算系数
+            项目点数按执行人员所在核算单元职系（T_DEPARTMENT.series_code）动态路由：
+            1001→护理执行点数 / 1011→临床执行点数 / 1036→医技执行点数，其余职系与未匹配项兜底 RVU_VAL。
+  积分口径: 积分 = 项目点数(职系动态) × 汇总数量 × 执行系数 × 学科系数(1.0) × 绩效核算系数
   模板占位符: '{year}' / '{month}' / '{start_time}' / '{end_time}' / {struct_codes}
   参数作用域: '{year}' / '{month}' 仅作用于落库日志表 [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] 的账期幂等清场与第二区块读取；
              '{start_time}' / '{end_time}' 严格收敛至底层事实表 [dbo].[PF临时医疗服务项目26A] 的 [接诊时间] 精确时间窗口筛选。
 
   修改日志：
+  2026-10-05 00:00:00 | 职系动态路由 | 项目点数由固定 RVU_VAL 升级为按执行人员所在核算单元职系动态路由：新增 dept_series_rank/dept_series 两层 CTE（UNIT_CODE=T_DEPARTMENT.[CODE]，CODE 与 series_code 统一 LTRIM(RTRIM(CAST(... AS NVARCHAR(100)))) 清洗，按 DELETE_FLAG ASC → ID DESC 取 RN=1 保 1:1，杜绝裸过滤行扩散）；cte_rvu 增补 NURSE_EXEC_RVU_VAL / CLINIC_EXEC_RVU_VAL / TECH_EXEC_RVU_VAL 三列投影（DECIMAL(18,8) 对齐全局精度）；final CTE 增 LEFT JOIN dept_series（sp_exec.[unit_code] = ds.[UNIT_CODE]）并定义计算列 [项目点数]（1001→护理 / 1011→临床 / 1036→医技，其余与未命中兜底 RVU_VAL），[积分] 乘项、[积分计算过程] 首项与 GROUP BY 同步切换为动态表达式；第一区块 INSERT 落库 [RVU_VAL] 与 JSON [单项RVU点数] 投影源同步切至 [项目点数]；JSON 内 [RVU配置快照].[单项绩效点数] 保持维表原始基线不变；时间窗口、人员黑名单、来源/科室硬隔离、学科系数、落库列清单、第二区块读取块与全部占位符（{year}/{month}/{start_time}/{end_time}/{struct_codes}）零改动。
   2026-09-30 18:00:00 | 时间维度变更 | 将核心维度 [执行时间] 重构替换为 [接诊时间]。具体落点：final CTE 派生列 [执行日期年份]/[执行日期月份] 更名为 [接诊日期年份]/[接诊日期月份]（YEAR/MONTH 取值源切至 f.[接诊时间]）；LEFT JOIN cte_staff_post 的年份/月份关联条件切至 f.[接诊时间]；LEFT JOIN dbo.[DIM_WORK_CALENDAR] 的 CAST(... AS DATE) 关联条件切至 f.[接诊时间]；WHERE 时间窗口过滤切至 f.[接诊时间]（精准字段比较，无函数包裹，SARGability 完整保留）；GROUP BY 时间分组字段切至 f.[接诊时间]；第一区块 INSERT 落库的 [CALC_YEAR]/[CALC_MONTH] 投影源与 JSON 序列化 [核算年份]/[核算月份] 映射源同步更正为接诊日期年份/月份列；头部「参数作用域」同步更正。计算口径（积分 = 项目点数 × 汇总数量 × 执行系数 × 学科系数 × 绩效核算系数）、聚合粒度、人员黑名单与来源/科室硬隔离、INSERT 列清单、第二区块读取逻辑与模板占位符契约零改动。
   2026-09-20 13:40:00 | 算法规则变更 | 门诊诊察类执行积分引入 DIM_PRF_ITEM_RVU_VERSION.EXEC_COFF（执行系数）乘法因子，积分口径由「项目点数 × 汇总数量 × 学科系数(1.0) × 绩效核算系数」重构为「项目点数 × 汇总数量 × 执行系数 × 学科系数(1.0) × 绩效核算系数」。具体落点：头部「积分口径」同步更正；final CTE [积分] 列表达式于 SUM(数量) 与学科系数之间插入 ISNULL(CAST(v.[EXEC_COFF] AS DECIMAL(18,8)), CAST(1.00000000 AS DECIMAL(18,8))) 乘项（NULL 兜底 1.0 防止空值经乘法传播导致整行积分归零）；final CTE [积分计算过程] 于「汇总数量」与「学科系数(1.0)」文本乘项之间插入 执行系数 文本项（CAST(... AS VARCHAR(32)) 与既有文本项宽度对齐）；第一区块 CALC_PROCESS_TEXT 公式说明前缀与 CALC_DETAIL_JSON 内 [计算过程描述] 公式说明前缀同步更新为「项目点数 × 汇总数量 × 执行系数 × 学科系数 × 绩效核算系数」。GROUP BY 维度结构（v.[EXEC_COFF] 分组基准）、时间窗口索引优化（f.[执行时间] 无函数包裹）、人员黑名单 BIGINT 字面量过滤（123/2523/2343）、f.[来源] = N'门诊' 硬隔离、执行科室代码 <> 36 隔离、落库 INSERT 列清单、[执行系数] JSON 节点投影与第二区块接口读取逻辑零改动。
   2026-09-20 10:20:00 | 字段格式化 | 第二区块 CTE_DWD_READ_ALIAS 中 [CREATE_TIME] 字段补齐 CONVERT(VARCHAR(19), ..., 120) 显式文本化转换，确保接口读取格式统一。
@@ -34,7 +37,25 @@ WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
 ;
 
 WITH
-cte_rvu AS (
+dept_series_rank AS (
+    SELECT
+        LTRIM(RTRIM(CAST(d.[CODE] AS NVARCHAR(100))))        AS UNIT_CODE,
+        LTRIM(RTRIM(CAST(d.[series_code] AS NVARCHAR(100)))) AS SERIES_CODE,
+        ROW_NUMBER() OVER (
+            PARTITION BY LTRIM(RTRIM(CAST(d.[CODE] AS NVARCHAR(100))))
+            ORDER BY d.[DELETE_FLAG] ASC, d.[ID] DESC
+        )                                                    AS RN
+    FROM dbo.[T_DEPARTMENT] AS d WITH (NOLOCK)
+    WHERE d.[CODE] IS NOT NULL
+)
+,dept_series AS (
+    SELECT
+        r.[UNIT_CODE],
+        r.[SERIES_CODE]
+    FROM dept_series_rank AS r
+    WHERE r.[RN] = 1
+)
+,cte_rvu AS (
     SELECT
         v0.[PROJ_CODE]                              AS PROJ_CODE
        ,v0.[VERSION_NO]                             AS VERSION_NO
@@ -58,6 +79,9 @@ cte_rvu AS (
        ,CAST(v0.[EXEC_COFF]     AS DECIMAL(18,8))  AS EXEC_COFF
        ,CAST(v0.[DECISION_COFF] AS DECIMAL(18,8))  AS DECISION_COFF
        ,CAST(v0.[UNIT_PRICE]    AS DECIMAL(18,8))  AS UNIT_PRICE
+       ,CAST(v0.[NURSE_EXEC_RVU_VAL]  AS DECIMAL(18,8)) AS NURSE_EXEC_RVU_VAL
+       ,CAST(v0.[CLINIC_EXEC_RVU_VAL] AS DECIMAL(18,8)) AS CLINIC_EXEC_RVU_VAL
+       ,CAST(v0.[TECH_EXEC_RVU_VAL]   AS DECIMAL(18,8)) AS TECH_EXEC_RVU_VAL
     FROM dbo.[DIM_PRF_ITEM_RVU_VERSION] AS v0 WITH (NOLOCK)
     WHERE v0.[PROJ_CODE] IS NOT NULL
       AND v0.[ITEM_CAT_CODE] = '1043'
@@ -103,7 +127,13 @@ SELECT
 
    ,v.[ITEM_CAT_CODE]                                         AS [绩效大类编码]
    ,v.[ITEM_CAT_NAME]                                         AS [绩效大类名称]
-   ,CAST(v.[RVU_VAL]   AS DECIMAL(18,8))                      AS [项目点数]
+   -- 【职系动态路由】项目点数随执行人员所在核算单元职系切换，未命中职系一律回退维表基线 RVU_VAL
+   ,CAST(CASE ISNULL(ds.[SERIES_CODE], '')
+             WHEN '1001' THEN ISNULL(CAST(v.[NURSE_EXEC_RVU_VAL]  AS DECIMAL(18,8)), CAST(v.[RVU_VAL] AS DECIMAL(18,8)))
+             WHEN '1011' THEN ISNULL(CAST(v.[CLINIC_EXEC_RVU_VAL] AS DECIMAL(18,8)), CAST(v.[RVU_VAL] AS DECIMAL(18,8)))
+             WHEN '1036' THEN ISNULL(CAST(v.[TECH_EXEC_RVU_VAL]   AS DECIMAL(18,8)), CAST(v.[RVU_VAL] AS DECIMAL(18,8)))
+             ELSE CAST(v.[RVU_VAL] AS DECIMAL(18,8))
+         END AS DECIMAL(18,8))                                  AS [项目点数]
    ,CAST(v.[EXEC_COFF] AS DECIMAL(18,8))                      AS [执行系数]
 
     -- 【聚合降维】剥离 f.[单价] 分组维度：正反向交易（退费/异动）归并后按 金额 ÷ 数量 动态计算加权平均单价
@@ -131,9 +161,19 @@ SELECT
    ,YEAR(f.[接诊时间])                                        AS [接诊日期年份]
    ,MONTH(f.[接诊时间])                                       AS [接诊日期月份]
 
-   ,CAST(v.[RVU_VAL] * SUM(CAST(f.[数量] AS DECIMAL(18,8))) * ISNULL(CAST(v.[EXEC_COFF] AS DECIMAL(18,8)), CAST(1.00000000 AS DECIMAL(18,8))) * CAST(1.0 AS DECIMAL(18,8)) * ISNULL(CAST(cal.[PERF_COEFF] AS DECIMAL(18,8)), CAST(1.00000000 AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS [积分]
+   ,CAST(CASE ISNULL(ds.[SERIES_CODE], '')
+                WHEN '1001' THEN ISNULL(CAST(v.[NURSE_EXEC_RVU_VAL]  AS DECIMAL(18,8)), CAST(v.[RVU_VAL] AS DECIMAL(18,8)))
+                WHEN '1011' THEN ISNULL(CAST(v.[CLINIC_EXEC_RVU_VAL] AS DECIMAL(18,8)), CAST(v.[RVU_VAL] AS DECIMAL(18,8)))
+                WHEN '1036' THEN ISNULL(CAST(v.[TECH_EXEC_RVU_VAL]   AS DECIMAL(18,8)), CAST(v.[RVU_VAL] AS DECIMAL(18,8)))
+                ELSE CAST(v.[RVU_VAL] AS DECIMAL(18,8))
+            END * SUM(CAST(f.[数量] AS DECIMAL(18,8))) * ISNULL(CAST(v.[EXEC_COFF] AS DECIMAL(18,8)), CAST(1.00000000 AS DECIMAL(18,8))) * CAST(1.0 AS DECIMAL(18,8)) * ISNULL(CAST(cal.[PERF_COEFF] AS DECIMAL(18,8)), CAST(1.00000000 AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS [积分]
    ,CONCAT(
-        CAST(CAST(v.[RVU_VAL] AS DECIMAL(18,8)) AS VARCHAR(32))
+        CAST(CAST(CASE ISNULL(ds.[SERIES_CODE], '')
+                       WHEN '1001' THEN ISNULL(CAST(v.[NURSE_EXEC_RVU_VAL]  AS DECIMAL(18,8)), CAST(v.[RVU_VAL] AS DECIMAL(18,8)))
+                       WHEN '1011' THEN ISNULL(CAST(v.[CLINIC_EXEC_RVU_VAL] AS DECIMAL(18,8)), CAST(v.[RVU_VAL] AS DECIMAL(18,8)))
+                       WHEN '1036' THEN ISNULL(CAST(v.[TECH_EXEC_RVU_VAL]   AS DECIMAL(18,8)), CAST(v.[RVU_VAL] AS DECIMAL(18,8)))
+                       ELSE CAST(v.[RVU_VAL] AS DECIMAL(18,8))
+                   END AS DECIMAL(18,8)) AS VARCHAR(32))
        ,' × '
        ,CAST(CAST(SUM(CAST(f.[数量] AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS VARCHAR(32))
        ,' × '
@@ -154,6 +194,8 @@ LEFT JOIN cte_staff_post AS sp_exec
     ON mdm_exec.[staff_code] = sp_exec.[staff_code]
    AND YEAR(f.[接诊时间])    = sp_exec.[year]
    AND MONTH(f.[接诊时间])   = sp_exec.[month]
+LEFT JOIN dept_series AS ds
+    ON ISNULL(sp_exec.[unit_code], N'未匹配') = ds.[UNIT_CODE]
 LEFT JOIN dbo.[DIM_WORK_CALENDAR] AS cal WITH (NOLOCK)
     ON CAST(f.[接诊时间] AS DATE) = cal.[CALC_DATE]
 WHERE f.[接诊时间] >= '{start_time}'
@@ -166,7 +208,12 @@ GROUP BY
    ,f.[项目名称]
    ,v.[ITEM_CAT_CODE]
    ,v.[ITEM_CAT_NAME]
-   ,v.[RVU_VAL]
+   ,CASE ISNULL(ds.[SERIES_CODE], '')
+        WHEN '1001' THEN ISNULL(CAST(v.[NURSE_EXEC_RVU_VAL]  AS DECIMAL(18,8)), CAST(v.[RVU_VAL] AS DECIMAL(18,8)))
+        WHEN '1011' THEN ISNULL(CAST(v.[CLINIC_EXEC_RVU_VAL] AS DECIMAL(18,8)), CAST(v.[RVU_VAL] AS DECIMAL(18,8)))
+        WHEN '1036' THEN ISNULL(CAST(v.[TECH_EXEC_RVU_VAL]   AS DECIMAL(18,8)), CAST(v.[RVU_VAL] AS DECIMAL(18,8)))
+        ELSE CAST(v.[RVU_VAL] AS DECIMAL(18,8))
+    END
    ,v.[EXEC_COFF]
    ,f.[执行人员代码]
    ,f.[执行人员]
