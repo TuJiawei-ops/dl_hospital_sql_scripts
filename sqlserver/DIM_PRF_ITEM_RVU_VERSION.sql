@@ -46,7 +46,10 @@ CREATE TABLE [dbo].[DIM_PRF_ITEM_RVU_VERSION] (
   [DECISION_COFF] decimal(18,4) DEFAULT 1.0000 NOT NULL,
   [EXEC_COFF] decimal(5,4) DEFAULT 1.0000 NOT NULL,
   [REMARK] varchar(255) COLLATE Chinese_PRC_CI_AS  NULL,
-  [SCORE_REASON] nvarchar(500) COLLATE Chinese_PRC_CI_AS  NULL
+  [SCORE_REASON] nvarchar(500) COLLATE Chinese_PRC_CI_AS  NULL,
+  [CLINIC_RVU_VAL] numeric(12,4) DEFAULT 0.0000 NOT NULL,
+  [TECH_RVU_VAL] numeric(12,4) DEFAULT 0.0000 NOT NULL,
+  [NURSE_RVU_VAL] numeric(12,4) DEFAULT 0.0000 NOT NULL
 )
 GO
 
@@ -212,6 +215,27 @@ EXEC sp_addextendedproperty
 'SCHEMA', N'dbo',
 'TABLE', N'DIM_PRF_ITEM_RVU_VERSION',
 'COLUMN', N'SCORE_REASON'
+GO
+
+EXEC sp_addextendedproperty
+'MS_Description', N'临床系列单项绩效点数（职系编码：1011 临床系列；多职系扩展点数，默认为 0.0000 降维兜底）',
+'SCHEMA', N'dbo',
+'TABLE', N'DIM_PRF_ITEM_RVU_VERSION',
+'COLUMN', N'CLINIC_RVU_VAL'
+GO
+
+EXEC sp_addextendedproperty
+'MS_Description', N'医技系列单项绩效点数（职系编码：1036 医技系列；多职系扩展点数，默认为 0.0000 降维兜底）',
+'SCHEMA', N'dbo',
+'TABLE', N'DIM_PRF_ITEM_RVU_VERSION',
+'COLUMN', N'TECH_RVU_VAL'
+GO
+
+EXEC sp_addextendedproperty
+'MS_Description', N'护理系列单项绩效点数（职系编码：1001 护理系列；多职系扩展点数，默认为 0.0000 降维兜底）',
+'SCHEMA', N'dbo',
+'TABLE', N'DIM_PRF_ITEM_RVU_VERSION',
+'COLUMN', N'NURSE_RVU_VAL'
 GO
 
 EXEC sp_addextendedproperty
