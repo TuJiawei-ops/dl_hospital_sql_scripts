@@ -47,9 +47,12 @@ CREATE TABLE [dbo].[DIM_PRF_ITEM_RVU_VERSION] (
   [EXEC_COFF] decimal(5,4) DEFAULT 1.0000 NOT NULL,
   [REMARK] varchar(255) COLLATE Chinese_PRC_CI_AS  NULL,
   [SCORE_REASON] nvarchar(500) COLLATE Chinese_PRC_CI_AS  NULL,
-  [CLINIC_RVU_VAL] numeric(12,4) DEFAULT 0.0000 NOT NULL,
-  [TECH_RVU_VAL] numeric(12,4) DEFAULT 0.0000 NOT NULL,
-  [NURSE_RVU_VAL] numeric(12,4) DEFAULT 0.0000 NOT NULL
+  [CLINIC_ORDER_RVU_VAL] decimal(18,4) DEFAULT 0.0000 NULL,
+  [CLINIC_EXEC_RVU_VAL] decimal(18,4) DEFAULT 0.0000 NULL,
+  [TECH_ORDER_RVU_VAL] decimal(18,4) DEFAULT 0.0000 NULL,
+  [TECH_EXEC_RVU_VAL] decimal(18,4) DEFAULT 0.0000 NULL,
+  [NURSE_ORDER_RVU_VAL] decimal(18,4) DEFAULT 0.0000 NULL,
+  [NURSE_EXEC_RVU_VAL] decimal(18,4) DEFAULT 0.0000 NULL
 )
 GO
 
@@ -218,24 +221,45 @@ EXEC sp_addextendedproperty
 GO
 
 EXEC sp_addextendedproperty
-'MS_Description', N'临床系列单项绩效点数（职系编码：1011 临床系列；多职系扩展点数，默认为 0.0000 降维兜底）',
+'MS_Description', N'临床系列开单单项绩效点数（职系编码：1011 临床系列；开单权责维度，默认为 0.0000 降维兜底）',
 'SCHEMA', N'dbo',
 'TABLE', N'DIM_PRF_ITEM_RVU_VERSION',
-'COLUMN', N'CLINIC_RVU_VAL'
+'COLUMN', N'CLINIC_ORDER_RVU_VAL'
 GO
 
 EXEC sp_addextendedproperty
-'MS_Description', N'医技系列单项绩效点数（职系编码：1036 医技系列；多职系扩展点数，默认为 0.0000 降维兜底）',
+'MS_Description', N'临床系列执行单项绩效点数（职系编码：1011 临床系列；执行权责维度，默认为 0.0000 降维兜底）',
 'SCHEMA', N'dbo',
 'TABLE', N'DIM_PRF_ITEM_RVU_VERSION',
-'COLUMN', N'TECH_RVU_VAL'
+'COLUMN', N'CLINIC_EXEC_RVU_VAL'
 GO
 
 EXEC sp_addextendedproperty
-'MS_Description', N'护理系列单项绩效点数（职系编码：1001 护理系列；多职系扩展点数，默认为 0.0000 降维兜底）',
+'MS_Description', N'医技系列开单单项绩效点数（职系编码：1036 医技系列；开单权责维度，默认为 0.0000 降维兜底）',
 'SCHEMA', N'dbo',
 'TABLE', N'DIM_PRF_ITEM_RVU_VERSION',
-'COLUMN', N'NURSE_RVU_VAL'
+'COLUMN', N'TECH_ORDER_RVU_VAL'
+GO
+
+EXEC sp_addextendedproperty
+'MS_Description', N'医技系列执行单项绩效点数（职系编码：1036 医技系列；执行权责维度，默认为 0.0000 降维兜底）',
+'SCHEMA', N'dbo',
+'TABLE', N'DIM_PRF_ITEM_RVU_VERSION',
+'COLUMN', N'TECH_EXEC_RVU_VAL'
+GO
+
+EXEC sp_addextendedproperty
+'MS_Description', N'护理系列开单单项绩效点数（职系编码：1001 护理系列；开单权责维度，默认为 0.0000 降维兜底）',
+'SCHEMA', N'dbo',
+'TABLE', N'DIM_PRF_ITEM_RVU_VERSION',
+'COLUMN', N'NURSE_ORDER_RVU_VAL'
+GO
+
+EXEC sp_addextendedproperty
+'MS_Description', N'护理系列执行单项绩效点数（职系编码：1001 护理系列；执行权责维度，默认为 0.0000 降维兜底）',
+'SCHEMA', N'dbo',
+'TABLE', N'DIM_PRF_ITEM_RVU_VERSION',
+'COLUMN', N'NURSE_EXEC_RVU_VAL'
 GO
 
 EXEC sp_addextendedproperty
