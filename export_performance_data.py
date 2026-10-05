@@ -9,17 +9,20 @@
 
  功能概述
  --------
- 连接本地 SQL Server 绩效库 hospital_performance_dalian_derma, 一次性导出 7 项
+ 连接本地 SQL Server 绩效库 hospital_performance_dalian_derma, 一次性导出 9 项
  绩效核算基础数据为 UTF-8-BOM (utf-8-sig) 编码的 CSV 文件, 供 Excel / 业务人员
  直接打开核对, 零乱码、零二次转换。
 
    任务 1  一次分配明细                      -> analyses/01_报表_一次分配明细业务视图.sql (纯 SELECT 直执行)
    任务 2  核算单元                          -> dbo.T_DEPARTMENT                      (32 列, 按 DDL 声明序对齐)
    任务 3  科室与核算单元映射表               -> dbo.sjjk_DEPT_UNIT_MAPPING_2025_11_27  (11 列)
-   任务 4  医院收费项目绩效点数版本维表        -> dbo.DIM_PRF_ITEM_RVU_VERSION            (23 列)
+   任务 4  医院收费项目绩效点数版本维表        -> dbo.DIM_PRF_ITEM_RVU_VERSION            (29 列)
    任务 5  各科室收费项目医技护执行划分维表     -> dbo.DIM_DEPT_ITEM_EXEC_RATIO            (26 列)
    任务 6  核算单元月度岗位系数与在岗状态明细表 -> dbo.ads_dept_post_coefficient_m          (16 列)
    任务 7  绩效核算日历维度表                 -> dbo.DIM_WORK_CALENDAR                   (11 列, 实体源自 20260915_create_dim_work_calendar.sql)
+   任务 8  个人月度绩效金额明细表             -> dbo.ads_emp_monthly_performance_m        (18 列, 按 DDL 声明序对齐)
+   任务 9  核算单元月度绩效测算与实际发放对比表 -> analyses/核算单元月度绩效测算与实际发放对比表.sql (纯 SELECT 直执行)
+
 
  输出目录规范
  ------------
@@ -31,12 +34,12 @@
 
  关键技术决策
  ------------
- 1. 【只读声明】全部 7 项任务均为纯只读 SELECT, 零 INSERT / UPDATE / DELETE /
+ 1. 【只读声明】全部 9 项任务均为纯只读 SELECT, 零 INSERT / UPDATE / DELETE /
      TRUNCATE / DDL 副作用, 对生产库绝对零写入。
- 2. 【占位符零注入】任务 1 的 SQL 不含 '{year}' / '{month}' / {struct_codes} 等
+ 2. 【占位符零注入】任务 1 与任务 9 的 SQL 不含 '{year}' / '{month}' / {struct_codes} 等
     模板占位符 (业务全量透视视图), 故本脚本无需任何参数替换动作, 直接整段执行;
     若未来该 SQL 引入占位符, 须在此处同步补齐替换逻辑, 严禁静默失败。
- 3. 【列序显式锁定】任务 2~7 一律使用显式列清单 SELECT, 严禁 SELECT *, 保证
+ 3. 【列序显式锁定】任务 2~8 一律使用显式列清单 SELECT, 严禁 SELECT *, 保证
     CSV 列序与 DDL 物理声明顺序、扩展属性中文注释严格一一对齐, 不受数据库
     物理列序变更或列追加影响。
  4. 【流式写出】采用 pyodbc 流式游标 + csv.writer 逐行写出, 内存占用恒定,
@@ -69,6 +72,8 @@
  2026-09-19 12:00:00 | 脚本新建 | 建立 7 项绩效核算基础数据 CSV 批量导出管道：pyodbc 流式游标 + csv.writer 逐行写出, 全局统一 TIMESTAMP(YYYYMMDD_HHMMSS) 字符串贯穿目录与文件名; 任务 1 直读 analyses/01_报表_一次分配明细业务视图.sql 纯 SELECT 内容执行, 任务 2~7 按 DDL 声明顺序显式列清单 + 中文别名映射导出; 输出 utf-8-sig 带 BOM, 保障 Excel 直开无乱码; 含逐任务错误处理、部分失败容错与连接物理清理动作。
  2026-09-30 10:00:00 | 增量修补 | 新增 Excel 显式文本锁定: 按数据库原始列名 (CODE/NO/DATE/TIME/ID/YEAR/MONTH + 中文键 编码/工号/日期/年份/月份) 构造 text_flags 位掩码, 逐值包裹 ="VALUE" 强制文本, 根治前导零丢失与科学计数法; 新增 _looks_numeric / is_text_lock_column / build_text_column_flags / format_text_cell / row_to_csv_record 模块级辅助函数; _write_csv 增补 text_flags 形参并以生成器逐行包裹保障 fetchmany 流式内存安全; 数值列裸输出保持可计算性。
  2026-09-30 14:00:00 | 增量修补 | 新增数值科学计数法拦截: 新增 is_numeric_like / normalize_decimal / format_numeric_value 数值展开层 (零值归一 '0', 非零按源 DECIMAL(18,8) 刻度 quantize 8 位展开, float 走 Decimal(repr) 防二进制舍入, NaN/Inf 原样字符串化); row_to_csv_record 重构为文本锁定/数值展开两路互斥分流, 字符串永不进入数值嗅探; format_text_cell 的 Decimal 分支复用 format_numeric_value; 新增 NUMERIC_SCALE_DIGITS / EXCEL_NUMERIC_SIGNIFICANT_DIGITS 常量。
+ 2026-10-05 16:30:00 | 增量修补 | 任务扩展 7→9 项: 新增常量 TASK9_SQL_RELATIVE_PATH 与列契约字典 EMP_PERFORMANCE_COLS (18 列, 对齐 ADS_EMP_MONTHLY_PERFORMANCE_M DDL 物理声明序); build_export_tasks() 追加任务 8 (dbo.ads_emp_monthly_performance_m, 显式列清单) 与任务 9 (直读 analyses/核算单元月度绩效测算与实际发放对比表.sql, columns=None 透传中文别名); 1~7 项任务及 row_to_csv_record / format_numeric_value / build_text_column_flags 底层逻辑零改动。
+ 2026-10-05 16:45:00 | 文档纠偏 | 修正头部清单任务 4 列数笔误 (23 列 → 29 列, 按 DIM_PRF_ITEM_RVU_VERSION DDL 实体列数校准); 同步将「7 项」表述更新为「9 项」并补录任务 8/9 清单行。
 =================================================================================
 """
 
@@ -130,6 +135,9 @@ TASK1_SQL_RELATIVE_PATH: str = "analyses/01_报表_一次分配明细业务视�
 
 # 任务 7 的 DDL 出处 (仅作文档溯源, 实际取数走数据库实体 dbo.DIM_WORK_CALENDAR)
 TASK7_DDL_RELATIVE_PATH: str = "sqlserver/20260915_create_dim_work_calendar.sql"
+
+# 任务 9 的 SQL 源文件 (项目内相对路径, 纯 SELECT 分析脚本, 剔除注释后直执行)
+TASK9_SQL_RELATIVE_PATH: str = "analyses/核算单元月度绩效测算与实际发放对比表.sql"
 
 # Excel 显式文本锁定: 命中以下关键字的列 (忽略大小写) 逐值包裹为 ="VALUE"
 # 判定依据为「数据库游标原始列名」, 故任务 1 的中文列头场景亦能命中 (中文键覆盖)。
@@ -457,6 +465,32 @@ WORK_CALENDAR_COLS: Dict[str, str] = {
     "CREATE_TIME": "创建时间",
 }
 
+# ---- 任务 8: 个人月度绩效金额明细表 (dbo.ads_emp_monthly_performance_m) ----
+# 列序严格对齐 sqlserver/ADS_EMP_MONTHLY_PERFORMANCE_M.sql 的 DDL 物理声明顺序 (共 18 列),
+# 中文别名取字段级扩展属性 (MS_Description) 的规范注释口径。
+# 说明: 本表账期列物理命名为 [year] / [month] (非 calc_year / calc_month), 必须裸引用真名;
+#       build_csv_header 会对契约列序与游标结果集做严格一致性校验, 故此处列序不可错位。
+EMP_PERFORMANCE_COLS: Dict[str, str] = {
+    "year": "核算年份",
+    "month": "核算月份",
+    "unit_code": "核算单元编码",
+    "unit_name": "核算单元名称",
+    "staff_code": "员工编码",
+    "staff_name": "员工姓名",
+    "staff_sequence": "员工序列",
+    "series_code": "所属职系编码",
+    "series_name": "所属职系名称",
+    "post_code": "岗位物理编码",
+    "post_name": "职务标签名称",
+    "performance_bonus": "绩效奖",
+    "management_performance": "管理绩效",
+    "total_performance": "合计绩效",
+    "fixed_performance": "固定部分绩效",
+    "performance_after_fixed_deduction": "扣除固定部分后绩效",
+    "remark": "备注",
+    "create_time": "创建时间",
+}
+
 
 # ---------------------------------------------------------------------------------
 # 3. 导出任务契约 (Export Task Contract)
@@ -709,7 +743,7 @@ def setup_console_logger() -> logging.Logger:
 
 def build_export_tasks() -> List[ExportTask]:
     """
-    装配 7 项导出任务清单。
+    装配 9 项导出任务清单。
 
     返回
     ----
@@ -771,6 +805,22 @@ def build_export_tasks() -> List[ExportTask]:
             describe=f"绩效核算日历维度表 (源: dbo.DIM_WORK_CALENDAR, DDL 出处 {TASK7_DDL_RELATIVE_PATH})",
             columns=WORK_CALENDAR_COLS,
             table_name=f"[{DB_SCHEMA}].[DIM_WORK_CALENDAR]",
+        ),
+        # ---- 任务 8: 个人月度绩效金额明细表 ----
+        ExportTask(
+            order=8,
+            file_prefix="个人月度绩效金额明细表",
+            describe="个人月度绩效金额明细表 (源: dbo.ads_emp_monthly_performance_m)",
+            columns=EMP_PERFORMANCE_COLS,
+            table_name=f"[{DB_SCHEMA}].[ads_emp_monthly_performance_m]",
+        ),
+        # ---- 任务 9: 核算单元月度绩效测算与实际发放对比表 ----
+        ExportTask(
+            order=9,
+            file_prefix="核算单元月度绩效测算与实际发放对比表",
+            describe=f"核算单元月度绩效测算与实际发放对比表 (源: {TASK9_SQL_RELATIVE_PATH})",
+            columns=None,           # 列头由 SQL 内部中文别名决定, 直接透传结果集列名
+            sql_file=TASK9_SQL_RELATIVE_PATH,
         ),
     ]
 
