@@ -382,9 +382,12 @@ RVU_COLS: Dict[str, str] = {
     "EXEC_COFF": "执行系数",
     "REMARK": "备注说明",
     "SCORE_REASON": "评分理由依据",
-    "CLINIC_RVU_VAL": "临床系列单项绩效点数",
-    "TECH_RVU_VAL": "医技系列单项绩效点数",
-    "NURSE_RVU_VAL": "护理系列单项绩效点数",
+    "CLINIC_ORDER_RVU_VAL": "临床开单绩效点数",
+    "CLINIC_EXEC_RVU_VAL": "临床执行绩效点数",
+    "TECH_ORDER_RVU_VAL": "医技开单绩效点数",
+    "TECH_EXEC_RVU_VAL": "医技执行绩效点数",
+    "NURSE_ORDER_RVU_VAL": "护理开单绩效点数",
+    "NURSE_EXEC_RVU_VAL": "护理执行绩效点数",
 }
 
 # ---- 任务 5: 各科室收费项目医技护执行划分维表 (dbo.DIM_DEPT_ITEM_EXEC_RATIO) ----
