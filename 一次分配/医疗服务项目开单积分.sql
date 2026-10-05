@@ -7,6 +7,7 @@
   数据流向: dbo.[PF临时医疗服务项目26A] (事实层)
             ──▶ dbo.[sjjk_bmb_2025_06_01] (字典桥接 开单科室代码 id -> 编码)
             ──▶ dbo.[sjjk_DEPT_UNIT_MAPPING_2025_11_27] (HIS 编码 -> 绩效核算单元)
+            ──▶ dbo.[T_DEPARTMENT] (核算单元 -> 职系编码, 驱动开单 RVU 动态路由)
             ──▶ dbo.[DIM_PRF_ITEM_RVU_VERSION] (维度层, 单版本 1:1 直连)
             ──▶ dbo.[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (落库 Target: ITEM_MED_SVC_ORDER_SCORE)
 
@@ -16,10 +17,14 @@
            [数量] DECIMAL(18,8)
   桥接表 : dbo.[sjjk_bmb_2025_06_01]（部门字典表）
            [id] bigint 主键聚簇 / [编码] nvarchar(10) —— 事实层数值主键 → HIS 业务编码的唯一桥接通道
+  职系表 : dbo.[T_DEPARTMENT]
+           [CODE] varchar(50) / [series_code] VARCHAR(50) NOT NULL DEFAULT '' / [DELETE_FLAG] / [ID]
+           核算单元编码 UNIT_CODE = [CODE]，按 DELETE_FLAG ASC → ID DESC 收敛 RN=1 保 1:1
   维表   : dbo.[DIM_PRF_ITEM_RVU_VERSION]
            主键 (ORG_CODE, VERSION_NO, PROJ_CODE, MEAS_UNIT)；当前系统仅存单版本，
            VERSION_NO 退化为纯快照/备注属性，脚本内做 1:1 直连，不开窗收敛
            [RVU_VAL] numeric(12,4) / [DECISION_COFF] decimal(18,4)
+           [CLINIC_ORDER_RVU_VAL] / [TECH_ORDER_RVU_VAL] / [NURSE_ORDER_RVU_VAL] decimal(18,4) 职系专用开单点数
   拉链维表: dbo.[sjjk_DEPT_UNIT_MAPPING_2025_11_27]
             [PERFORM_PERSON_TYPE_CODE] varchar(100) / [HIS_DEPT_CODE] varchar(300)
             [HPS_DEPT_CODE] / [HPS_DEPT_NAME] / [START_DATE] datetime2 / [END_DATE] datetime2
@@ -32,8 +37,14 @@
      映射关系按业务预期产生行级扩散，严禁用 ROW_NUMBER() 折叠导致合法映射静默丢失。
   4. 【RVU 全字段快照】dim_version_scope 升级为全字段 1:1 直连（[ID] 别名 RVU_ID 防主键碰撞），
      JSON 过程仓追加单层嵌套 [RVU配置快照] 节点，留存维度行完整血缘（版本/机构/计费单位/审计人等）。
+  5. 【开单 RVU 职系动态路由】核算单元 UNIT_CODE ──▶ T_DEPARTMENT.[CODE] 取 [series_code]：
+     1001→NURSE_ORDER_RVU_VAL / 1011→CLINIC_ORDER_RVU_VAL / 1036→TECH_ORDER_RVU_VAL，
+     其余职系与未匹配项兜底 [RVU_VAL]。RVU 随核算单元变化，故聚合层
+     （agg_coff_collapse / agg）严禁将 RVU_VAL 折叠为项目级单值，GROUP BY 必须收敛于
+     joined 的单元级 [RVU_VAL]，否则动态路由被静默压平为项目级常态。
 
   修改日志：
+  2026-10-05 00:00:00 | 职系动态路由 | 开单 RVU 由项目级单值升级为按核算单元职系动态路由：新增 dept_series_rank/dept_series 两层 CTE（UNIT_CODE=T_DEPARTMENT.[CODE]，按 DELETE_FLAG ASC → ID DESC 取 RN=1 保 1:1，严禁裸过滤行扩散）；dim_version_scope 增补 CLINIC_ORDER_RVU_VAL / TECH_ORDER_RVU_VAL / NURSE_ORDER_RVU_VAL 三列投影（DECIMAL(18,8) 对齐全局精度）；joined 增 LEFT JOIN dept_series 并以 CASE 路由 1001/1011/1036 三职系、其余兜底 RVU_VAL；根治 agg_coff_collapse 将 RVU_VAL 以 MAX() 折叠为项目级单值导致路由失效的隐患，移除其 RVU_VAL/DECISION_COFF 折叠列并改由 agg 直取 joined 单元级 [RVU_VAL]，agg GROUP BY / 投影源同步切换为 j.[RVU_VAL]；落库列、JSON 过程仓 14 节点、双区块 Envelope 与全部占位符零改动。
   2026-09-30 00:00:00 | 时间维度变更 | 依据2026-09-30需求变更，取消按来源分流，门诊与非门诊统一下沉至 a.[缴费时间] 闭区间筛选。
   2026-09-28 12:00:00 | 人员类别扩展 | dept_unit_mapping CTE 中 PERFORM_PERSON_TYPE_CODE 过滤条件由等于 '1001' 扩展为 IN ('1001', '1021', '1005')，确保收款室、方便门诊等行后与其它序列科室映射关系正常生效。
   2026-09-20 10:20:00 | 字段格式化 | 第二区块 CTE_DWD_READ_ALIAS 中 [CREATE_TIME] 字段补齐 CONVERT(VARCHAR(19), ..., 120) 显式文本化转换，确保接口读取格式统一（ISO 8601 yyyy-mm-dd hh:mi:ss）；生效范围：仅第 352 行读取块投影表达式，第一区块落库物理列 SYSDATETIME() 原生 DATETIME2、CTE 列投影、JSON 快照、占位符与 ~ 分隔符零改动。
@@ -133,6 +144,28 @@ dept_unit_mapping AS (
     WHERE m.[PERFORM_PERSON_TYPE_CODE] IN ('1001', '1021', '1005')
 ),
 
+-- ── Import CTE: 核算单元职系维表（UNIT_CODE → 职系编码，供开单 RVU 动态路由） ──
+--    [CODE] 在物理表内不保证唯一，沿用项目既有确定性收敛范式（DELETE_FLAG ASC → ID DESC 取 RN=1），
+--    严禁裸 WHERE 过滤导致行扩散污染积分。
+dept_series_rank AS (
+    SELECT
+        d.[CODE]                                    AS UNIT_CODE,
+        d.[series_code]                             AS SERIES_CODE,
+        ROW_NUMBER() OVER (
+            PARTITION BY d.[CODE]
+            ORDER BY d.[DELETE_FLAG] ASC, d.[ID] DESC
+        )                                           AS RN
+    FROM dbo.[T_DEPARTMENT] AS d WITH (NOLOCK)
+    WHERE d.[CODE] IS NOT NULL
+),
+dept_series AS (
+    SELECT
+        r.[UNIT_CODE],
+        r.[SERIES_CODE]
+    FROM dept_series_rank AS r
+    WHERE r.[RN] = 1
+),
+
 -- ── Import CTE: 绩效大类维表作用域（全字段 1:1 直连，大类剔除前置剪枝；[ID] 别名 RVU_ID 防与日志表主键碰撞） ──
 dim_version_scope AS (
     SELECT
@@ -144,7 +177,10 @@ dim_version_scope AS (
         b.[PROJ_CODE],
         b.[PROJ_NAME],
         b.[MEAS_UNIT],
-        CAST(b.[RVU_VAL] AS DECIMAL(18,8))        AS RVU_VAL,
+        CAST(b.[RVU_VAL] AS DECIMAL(18,8))               AS RVU_VAL,
+        CAST(b.[CLINIC_ORDER_RVU_VAL] AS DECIMAL(18,8))  AS CLINIC_ORDER_RVU_VAL,
+        CAST(b.[TECH_ORDER_RVU_VAL] AS DECIMAL(18,8))    AS TECH_ORDER_RVU_VAL,
+        CAST(b.[NURSE_ORDER_RVU_VAL] AS DECIMAL(18,8))   AS NURSE_ORDER_RVU_VAL,
         b.[ITEM_CAT_CODE],
         b.[ITEM_CAT_NAME],
         CAST(b.[UNIT_PRICE] AS DECIMAL(18,8))     AS UNIT_PRICE,
@@ -165,6 +201,8 @@ dim_version_scope AS (
 ),
 
 -- ── Logical CTE: 事实 × 维度 关联（HIS 编码强关联核算单元，原始科室字段到此为止） ──
+--    RVU 点数按核算单元所属职系动态路由：护理 '1001' / 临床 '1011' / 医技 '1036'，
+--    其余职系与未匹配项兜底 RVU_VAL；职系列缺失（NULL）时按未匹配处理。
 joined AS (
     SELECT
         f.[PROJ_CODE],
@@ -173,10 +211,25 @@ joined AS (
         ISNULL(m.[HPS_DEPT_NAME], '未映射核算单元')      AS UNIT_NAME,
         d.[ITEM_CAT_CODE],
         d.[ITEM_CAT_NAME],
-        d.[RVU_VAL],
+        CASE
+            WHEN ds.[SERIES_CODE] = '1001' THEN ISNULL(d.[NURSE_ORDER_RVU_VAL], d.[RVU_VAL])
+            WHEN ds.[SERIES_CODE] = '1011' THEN ISNULL(d.[CLINIC_ORDER_RVU_VAL], d.[RVU_VAL])
+            WHEN ds.[SERIES_CODE] = '1036' THEN ISNULL(d.[TECH_ORDER_RVU_VAL], d.[RVU_VAL])
+            ELSE d.[RVU_VAL]
+        END                                             AS RVU_VAL,
         d.[DECISION_COFF],
         f.[QTY],
-        CAST(f.[QTY] * d.[RVU_VAL] * d.[DECISION_COFF] AS DECIMAL(18,8)) AS ITEM_SCORE
+        CAST(
+            f.[QTY]
+            * (CASE
+                   WHEN ds.[SERIES_CODE] = '1001' THEN ISNULL(d.[NURSE_ORDER_RVU_VAL], d.[RVU_VAL])
+                   WHEN ds.[SERIES_CODE] = '1011' THEN ISNULL(d.[CLINIC_ORDER_RVU_VAL], d.[RVU_VAL])
+                   WHEN ds.[SERIES_CODE] = '1036' THEN ISNULL(d.[TECH_ORDER_RVU_VAL], d.[RVU_VAL])
+                   ELSE d.[RVU_VAL]
+               END)
+            * d.[DECISION_COFF]
+            AS DECIMAL(18,8)
+        ) AS ITEM_SCORE
     FROM fact_raw AS f
     INNER JOIN dim_version_scope AS d
         ON f.[PROJ_CODE] = d.[PROJ_CODE]
@@ -184,6 +237,8 @@ joined AS (
         ON f.[HIS_DEPT_CODE] = m.[HIS_DEPT_CODE]
        AND f.[ORDER_TIME] >= m.[START_DATE]
        AND (m.[END_DATE] IS NULL OR f.[ORDER_TIME] < m.[END_DATE])
+    LEFT JOIN dept_series AS ds
+        ON ISNULL(m.[HPS_DEPT_CODE], 'UNKNOWN') = ds.[UNIT_CODE]
 ),
 
 -- ── Logical CTE: 维度系数收敛（隔离 ORG_CODE / MEAS_UNIT 多维分支，防最外层聚合被污染） ──
@@ -192,9 +247,7 @@ agg_coff_collapse AS (
         j.[PROJ_CODE],
         MAX(j.[PROJ_NAME])     AS PROJ_NAME,
         MAX(j.[ITEM_CAT_CODE]) AS ITEM_CAT_CODE,
-        MAX(j.[ITEM_CAT_NAME]) AS ITEM_CAT_NAME,
-        MAX(j.[RVU_VAL])       AS RVU_VAL,
-        MAX(j.[DECISION_COFF]) AS DECISION_COFF
+        MAX(j.[ITEM_CAT_NAME]) AS ITEM_CAT_NAME
     FROM joined AS j
     GROUP BY j.[PROJ_CODE]
 ),
@@ -210,8 +263,8 @@ agg AS (
         c.[PROJ_NAME],
         c.[ITEM_CAT_CODE],
         c.[ITEM_CAT_NAME],
-        c.[RVU_VAL],
-        c.[DECISION_COFF],
+        j.[RVU_VAL],
+        j.[DECISION_COFF],
         CAST(SUM(j.[QTY])        AS DECIMAL(18,8)) AS TOTAL_QTY,
         CAST(SUM(j.[ITEM_SCORE]) AS DECIMAL(18,8)) AS DECISION_SCORE
     FROM joined AS j
@@ -224,8 +277,8 @@ agg AS (
         c.[PROJ_NAME],
         c.[ITEM_CAT_CODE],
         c.[ITEM_CAT_NAME],
-        c.[RVU_VAL],
-        c.[DECISION_COFF]
+        j.[RVU_VAL],
+        j.[DECISION_COFF]
 ),
 
 -- ── Final CTE: 出口契约与 JSON 过程仓打包（仅追加核算单元过滤，防全院单元越界落库） ──
