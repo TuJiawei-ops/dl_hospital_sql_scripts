@@ -5,6 +5,7 @@
             剔除绩效大类 1101(出入院服务类)、1043(门诊诊察类)。
   数据流向: dbo.[PF临时医疗服务项目26A]
             ──▶ dbo.[sjjk_bmb_2025_06_01] (字典桥接 id -> 编码)
+            ──▶ dbo.[T_DEPARTMENT] (核算单元 -> 职系编码, 驱动执行 RVU 动态路由)
             ──▶ dbo.[DIM_PRF_ITEM_RVU_VERSION] (维表全字段直连)
             ──▶ dbo.[DIM_DEPT_ITEM_EXEC_RATIO] (医技护执行比例)
             ──▶ dbo.[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (落库 Target: ITEM_MED_SVC_EXEC_SCORE)
@@ -12,7 +13,11 @@
   ── 依赖契约 ──
   事实表 : dbo.[PF临时医疗服务项目26A] ([项目代码] NVARCHAR(60) / [数量] [金额] DECIMAL(18,8))
   桥接表 : dbo.[sjjk_bmb_2025_06_01] ([id] BIGINT -> [编码] NVARCHAR(10)，桥接输出 VARCHAR(60))
+  职系表 : dbo.[T_DEPARTMENT]
+           [CODE] nvarchar(20) / [series_code] VARCHAR(50) NOT NULL DEFAULT '' / [DELETE_FLAG] decimal(4) / [ID] decimal(20)
+           核算单元编码 UNIT_CODE = [CODE]，按 DELETE_FLAG ASC → ID DESC 收敛 RN=1 保 1:1
   维表 A : dbo.[DIM_PRF_ITEM_RVU_VERSION] (全字段直连，[ID] 别名 RVU_ID 规避 ID 碰撞)
+           [CLINIC_EXEC_RVU_VAL] / [TECH_EXEC_RVU_VAL] / [NURSE_EXEC_RVU_VAL] decimal(18,4) 职系专用执行点数
   维表 B : dbo.[DIM_DEPT_ITEM_EXEC_RATIO] (生效态 IS_ENABLED = 1，医技护临四角色并列映射)
   ── 核心架构与约束规范（极简版） ──
   1. 【血缘桥接】：事实层 [执行科室代码](BIGINT id) 必须经字典表映射为业务 [编码] 后，方可与维表 B 关联。
@@ -23,6 +28,10 @@
   6. 【反推综合比例】：final 层统一通过 [总执行积分] ÷ ([总数量] × [点数]) 反推加权比例，全链 DECIMAL(18,8) 同精度。
   7. 【JSON 性能红线】：CALC_DETAIL_JSON 采用单层扁平标量 + 索引命中的 RVU 嵌套快照，严格限制为 O(N) 内存拼接，禁止外部表回表。
   8. 【BIZ_EPOCH】：账期右端点哨兵（次月 1 日 00:00:00），仅穿越 CTE 链供下游半开区间匹配，严禁对外输出或参与聚合/分组。
+  9. 【执行 RVU 职系动态路由】：核算单元 u.[HPS_DEPT_CODE] ──▶ T_DEPARTMENT.[CODE] 取 [series_code]：
+     1001→NURSE_EXEC_RVU_VAL / 1011→CLINIC_EXEC_RVU_VAL / 1036→TECH_EXEC_RVU_VAL，
+     其余职系与未匹配项兜底 [RVU_VAL]。RVU 随核算单元变化，故 cte_role_unpivot 的 GROUP BY
+     必须收敛于动态计算列 [DYNAMIC_RVU_VAL]，严禁还原为项目级单值导致路由被静默压平。
 
   ── 模板占位符 ──
   '{year}'      : 核算年份 (如 '2025')
@@ -32,6 +41,7 @@
   {struct_codes}: 核算单元过滤集 (如 ('10001', '10002'))
 
   修改日志：
+  2026-10-05 00:00:00 | 职系动态路由 | 执行 RVU 由项目级单值升级为按核算单元职系动态路由：新增 dept_series_rank/dept_series 两层 CTE（UNIT_CODE=T_DEPARTMENT.[CODE]，CODE 与 series_code 统一 LTRIM(RTRIM(CAST(... AS NVARCHAR(100)))) 清洗，按 DELETE_FLAG ASC → ID DESC 取 RN=1 保 1:1，杜绝裸过滤行扩散）；dim_version_scope 增补 NURSE_EXEC_RVU_VAL / CLINIC_EXEC_RVU_VAL / TECH_EXEC_RVU_VAL 三列投影（DECIMAL(18,8) 对齐全局精度）；cte_role_unpivot 增 LEFT JOIN dept_series 取 series_code 并定义计算列 [DYNAMIC_RVU_VAL]（1001→护理 / 1011→临床 / 1036→医技，其余与未命中兜底 RVU_VAL），[RVU_VAL] 改用 [DYNAMIC_RVU_VAL] 参与积分 SUM、EXEC_RATIO 反推与 GROUP BY；final 审计文本（中文逻辑公式段 + 数学代入段）与 CALC_DETAIL_JSON [单项RVU点数] 同步切换为动态值；落库 [RVU_VAL] 物理列投影源切至动态值；RVU 嵌套快照 [单项绩效点数] 保留维表原始基线不变；上游过滤（IS_ENABLED=1 / 绩效大类剔除 / 时间窗口）、角色展开、落库列清单、第二区块读取块与全部占位符（{year}/{month}/{start_time}/{end_time}/{struct_codes}）零改动。
   2026-09-30 00:00:00 | 时间维度变更 | 依据2026-09-30需求变更，取消按来源分流，门诊与非门诊统一下沉至 a.[缴费时间] 闭区间筛选。
   2026-09-20 15:10:00 | 角色扩展 | 医技护解包逻辑追加第四类【临床】核算单元角色映射，与 sqlserver/DIM_DEPT_ITEM_EXEC_RATIO.sql 新增的 CLINICAL_EXEC_RATIO / CLINICAL_HPS_DEPT_CODE / CLINICAL_HPS_DEPT_NAME 三列完成消费链路对接。具体落点：dim_exec_ratio_raw 追加 r.[CLINICAL_EXEC_RATIO] / r.[CLINICAL_HPS_DEPT_CODE] / r.[CLINICAL_HPS_DEPT_NAME] 三列投影；joined 追加 ISNULL(x.[CLINICAL_EXEC_RATIO], CAST(0.00000000 AS DECIMAL(18,8))) AS CLINICAL_EXEC_RATIO 与 x.[CLINICAL_HPS_DEPT_CODE] / x.[CLINICAL_HPS_DEPT_NAME] 投影（NULL 兜底 0 与既有医技护三路口径完全一致）；cte_role_unpivot 的 CROSS APPLY (VALUES ...) 数组末尾追加 ('临床', j.[CLINICAL_EXEC_RATIO], j.[CLINICAL_HPS_DEPT_CODE], j.[CLINICAL_HPS_DEPT_NAME]) 行项，VALUES 四列间距对齐重排。上游过滤（IS_ENABLED = 1 / 绩效大类剔除 / 时间窗口）、积分公式（数量 × RVU × 执行系数 × 执行比例）、GROUP BY 结构、下游 final CTE、JSON 快照、Envelope 双区块与全部占位符零改动。既有过滤链 u.[EXEC_RATIO] > 0 AND u.[HPS_DEPT_CODE] IS NOT NULL 天然覆盖临床行项：未配置临床规则时 EXEC_RATIO 兜底 0 被短路剔除，零副作用。
   2026-09-20 12:20:00 | 算法规则变更 | 医疗服务项目执行积分逻辑追加 DIM_PRF_ITEM_RVU_VERSION.EXEC_COFF（执行系数）乘积项，同步更新 cte_role_unpivot 积分汇总公式、final 综合执行比例反推逻辑、三段式审计文本 CALC_PROCESS_TEXT 及 JSON 快照。生效范围：joined 追加 ISNULL(EXEC_COFF, 1.00000000) 投影；cte_role_unpivot 增列 j.[EXEC_COFF] 并同步 GROUP BY、TOTAL_EXEC_POINTS 由「数量 × RVU × 执行比例」升级为「数量 × RVU × 执行系数 × 执行比例」；final 透传 EXEC_COFF、EXEC_RATIO 反推分母追加 r.[EXEC_COFF]、审计文本中文逻辑公式段与数学代入段同步补乘执行系数；CALC_DETAIL_JSON 扁平节点在 [单项RVU点数] 下方追加 CAST(f.[EXEC_COFF] AS DECIMAL(18,8)) AS [执行系数]。落库物理列、DWD_FIN_CALC_ALLOC1_DETAIL_LOG 表结构、RVU 嵌套快照、第二区块接口读取块与全部模板占位符（{year}/{month}/{start_time}/{end_time}/{struct_codes}）零改动。
@@ -106,6 +116,9 @@ dim_version_scope AS (
         b.[PROJ_NAME],
         b.[MEAS_UNIT],
         CAST(b.[RVU_VAL] AS DECIMAL(18,8))        AS RVU_VAL,
+        CAST(b.[NURSE_EXEC_RVU_VAL] AS DECIMAL(18,8))  AS NURSE_EXEC_RVU_VAL,
+        CAST(b.[CLINIC_EXEC_RVU_VAL] AS DECIMAL(18,8)) AS CLINIC_EXEC_RVU_VAL,
+        CAST(b.[TECH_EXEC_RVU_VAL] AS DECIMAL(18,8))   AS TECH_EXEC_RVU_VAL,
         b.[ITEM_CAT_CODE],
         b.[ITEM_CAT_NAME],
         CAST(b.[UNIT_PRICE] AS DECIMAL(18,8))     AS UNIT_PRICE,
@@ -123,6 +136,29 @@ dim_version_scope AS (
     FROM dbo.[DIM_PRF_ITEM_RVU_VERSION] AS b WITH (NOLOCK)
     WHERE b.[ITEM_CAT_CODE] NOT IN ('1101', '1043')
       AND b.[PROJ_CODE] IS NOT NULL
+),
+
+-- ── Import CTE: 核算单元职系维表（UNIT_CODE → 职系编码，供执行 RVU 动态路由） ──
+--    [CODE] 在物理表内不保证唯一，沿用项目既有确定性收敛范式（DELETE_FLAG ASC → ID DESC 取 RN=1），
+--    严禁裸 WHERE 过滤导致行扩散污染积分。CODE 与 series_code 统一去首尾空格清洗后再比较，
+--    彻底消除隐藏空格导致的路由失配与非预期 Fallback 回退。
+dept_series_rank AS (
+    SELECT
+        LTRIM(RTRIM(CAST(d.[CODE] AS NVARCHAR(100))))        AS UNIT_CODE,
+        LTRIM(RTRIM(CAST(d.[series_code] AS NVARCHAR(100)))) AS SERIES_CODE,
+        ROW_NUMBER() OVER (
+            PARTITION BY LTRIM(RTRIM(CAST(d.[CODE] AS NVARCHAR(100))))
+            ORDER BY d.[DELETE_FLAG] ASC, d.[ID] DESC
+        )                                                    AS RN
+    FROM dbo.[T_DEPARTMENT] AS d WITH (NOLOCK)
+    WHERE d.[CODE] IS NOT NULL
+),
+dept_series AS (
+    SELECT
+        r.[UNIT_CODE],
+        r.[SERIES_CODE]
+    FROM dept_series_rank AS r
+    WHERE r.[RN] = 1
 ),
 
 -- ── Import CTE: 医技护临执行划分维表作用域（仅取启用态规则） ──
@@ -160,6 +196,10 @@ joined AS (
         c.[ITEM_CAT_CODE],
         c.[ITEM_CAT_NAME],
         c.[RVU_VAL],
+        -- 职系专用执行点数：随核算单元职系动态路由，NULL 由下游 ISNULL 兜底回退 RVU_VAL
+        c.[NURSE_EXEC_RVU_VAL],
+        c.[CLINIC_EXEC_RVU_VAL],
+        c.[TECH_EXEC_RVU_VAL],
         -- 执行系数：单版本直连下与 (项目) 1:1 恒定，NULL 兜底 1.0 防止下游积分整行归零
         ISNULL(c.[EXEC_COFF], CAST(1.00000000 AS DECIMAL(18,8))) AS EXEC_COFF,
         ISNULL(x.[DOC_EXEC_RATIO],   CAST(0.00000000 AS DECIMAL(18,8))) AS DOC_EXEC_RATIO,
@@ -183,6 +223,8 @@ joined AS (
 ),
 
 -- ── Intermediate CTE: 角色展开与核算单元预聚合（按 核算单元 × 项目 × 角色 维度切分并消除 HIS 科室差异） ──
+--    执行 RVU 按核算单元所属职系动态路由：护理 '1001' / 临床 '1011' / 医技 '1036'，
+--    其余职系与未匹配项兜底 RVU_VAL；职系列缺失（NULL）或未命中时按未匹配处理。
 cte_role_unpivot AS (
     SELECT
         j.[BIZ_EPOCH],
@@ -192,12 +234,23 @@ cte_role_unpivot AS (
         j.[PROJ_NAME],
         j.[ITEM_CAT_CODE],
         j.[ITEM_CAT_NAME],
-        j.[RVU_VAL],
+        -- 动态执行点数：随核算单元职系切换，未命中职系一律回退维表基线 RVU_VAL
+        CAST(CASE
+                 WHEN ds.[SERIES_CODE] = '1001' THEN ISNULL(j.[NURSE_EXEC_RVU_VAL], j.[RVU_VAL])
+                 WHEN ds.[SERIES_CODE] = '1011' THEN ISNULL(j.[CLINIC_EXEC_RVU_VAL], j.[RVU_VAL])
+                 WHEN ds.[SERIES_CODE] = '1036' THEN ISNULL(j.[TECH_EXEC_RVU_VAL], j.[RVU_VAL])
+                 ELSE j.[RVU_VAL]
+             END AS DECIMAL(18,8))                                                    AS DYNAMIC_RVU_VAL,
         j.[EXEC_COFF],
         u.[ROLE_NAME]                                                                 AS EXEC_ROLE,
         CAST(SUM(CAST(j.[QTY]    AS DECIMAL(18,8))) AS DECIMAL(18,8))                 AS TOTAL_QTY,
         CAST(SUM(CAST(j.[AMOUNT] AS DECIMAL(18,8))) AS DECIMAL(18,8))                 AS TOTAL_AMOUNT,
-        CAST(SUM(CAST(j.[QTY] * j.[RVU_VAL] * j.[EXEC_COFF] * u.[EXEC_RATIO] AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS TOTAL_EXEC_POINTS
+        CAST(SUM(CAST(j.[QTY] * CASE
+                                    WHEN ds.[SERIES_CODE] = '1001' THEN ISNULL(j.[NURSE_EXEC_RVU_VAL], j.[RVU_VAL])
+                                    WHEN ds.[SERIES_CODE] = '1011' THEN ISNULL(j.[CLINIC_EXEC_RVU_VAL], j.[RVU_VAL])
+                                    WHEN ds.[SERIES_CODE] = '1036' THEN ISNULL(j.[TECH_EXEC_RVU_VAL], j.[RVU_VAL])
+                                    ELSE j.[RVU_VAL]
+                                END * j.[EXEC_COFF] * u.[EXEC_RATIO] AS DECIMAL(18,8))) AS DECIMAL(18,8)) AS TOTAL_EXEC_POINTS
     FROM joined AS j
     CROSS APPLY (
         VALUES
@@ -206,6 +259,8 @@ cte_role_unpivot AS (
             ('护士', j.[NURSE_EXEC_RATIO],    j.[NURSE_HPS_DEPT_CODE],    j.[NURSE_HPS_DEPT_NAME]),
             ('临床', j.[CLINICAL_EXEC_RATIO], j.[CLINICAL_HPS_DEPT_CODE], j.[CLINICAL_HPS_DEPT_NAME])
     ) AS u([ROLE_NAME], [EXEC_RATIO], [HPS_DEPT_CODE], [HPS_DEPT_NAME])
+    LEFT JOIN dept_series AS ds
+        ON u.[HPS_DEPT_CODE] = ds.[UNIT_CODE]
     WHERE 1 =1
       AND u.[HPS_DEPT_CODE] IN {struct_codes}
       AND u.[EXEC_RATIO] > CAST(0.00000000 AS DECIMAL(18,8))
@@ -218,7 +273,12 @@ cte_role_unpivot AS (
         j.[PROJ_NAME],
         j.[ITEM_CAT_CODE],
         j.[ITEM_CAT_NAME],
-        j.[RVU_VAL],
+        CASE
+            WHEN ds.[SERIES_CODE] = '1001' THEN ISNULL(j.[NURSE_EXEC_RVU_VAL], j.[RVU_VAL])
+            WHEN ds.[SERIES_CODE] = '1011' THEN ISNULL(j.[CLINIC_EXEC_RVU_VAL], j.[RVU_VAL])
+            WHEN ds.[SERIES_CODE] = '1036' THEN ISNULL(j.[TECH_EXEC_RVU_VAL], j.[RVU_VAL])
+            ELSE j.[RVU_VAL]
+        END,
         j.[EXEC_COFF],
         u.[ROLE_NAME]
 ),
@@ -235,11 +295,11 @@ final AS (
         r.[PROJ_NAME],
         r.[ITEM_CAT_CODE],
         r.[ITEM_CAT_NAME],
-        r.[RVU_VAL],
+        r.[DYNAMIC_RVU_VAL]                                                                               AS RVU_VAL,
         r.[EXEC_COFF],
         r.[EXEC_ROLE],
-        -- 综合反推执行比例 = 总积分 / (总数量 × RVU × 执行系数)，若总基数为 0 则兜底 0
-        CAST(ISNULL(r.[TOTAL_EXEC_POINTS] / NULLIF(r.[TOTAL_QTY] * r.[RVU_VAL] * r.[EXEC_COFF], 0), 0) AS DECIMAL(18,8)) AS EXEC_RATIO,
+        -- 综合反推执行比例 = 总积分 / (总数量 × 动态单项点数 × 执行系数)，若总基数为 0 则兜底 0
+        CAST(ISNULL(r.[TOTAL_EXEC_POINTS] / NULLIF(r.[TOTAL_QTY] * r.[DYNAMIC_RVU_VAL] * r.[EXEC_COFF], 0), 0) AS DECIMAL(18,8)) AS EXEC_RATIO,
         r.[TOTAL_QTY]                                                                                     AS QTY,
         r.[TOTAL_AMOUNT]                                                                                  AS AMOUNT,
         r.[TOTAL_EXEC_POINTS]                                                                             AS EXEC_POINTS,
@@ -248,9 +308,9 @@ final AS (
         -- 末段直接收敛至最终执行积分，数学算式自身已完成唯一数字收口
         '医疗服务执行积分 | 科室项目角色执行积分 = 汇总数量 × 单项RVU点数 × 执行系数 × 执行比例 | '
             + CAST(r.[TOTAL_QTY] AS VARCHAR(50)) + ' × '
-            + CAST(r.[RVU_VAL] AS VARCHAR(50)) + ' × '
+            + CAST(r.[DYNAMIC_RVU_VAL] AS VARCHAR(50)) + ' × '
             + CAST(r.[EXEC_COFF] AS VARCHAR(50)) + ' × '
-            + CAST(CAST(ISNULL(r.[TOTAL_EXEC_POINTS] / NULLIF(r.[TOTAL_QTY] * r.[RVU_VAL] * r.[EXEC_COFF], 0), 0) AS DECIMAL(18,8)) AS VARCHAR(50)) + ' = '
+            + CAST(CAST(ISNULL(r.[TOTAL_EXEC_POINTS] / NULLIF(r.[TOTAL_QTY] * r.[DYNAMIC_RVU_VAL] * r.[EXEC_COFF], 0), 0) AS DECIMAL(18,8)) AS VARCHAR(50)) + ' = '
             + CAST(r.[TOTAL_EXEC_POINTS] AS VARCHAR(50))                                              AS CALC_PROCESS_TEXT
     FROM cte_role_unpivot AS r
 )
