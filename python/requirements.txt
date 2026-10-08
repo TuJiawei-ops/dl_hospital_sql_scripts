@@ -24,5 +24,8 @@ SQLAlchemy>=2.0.0
 # 数据分析 (用于同步结果核对与报表输出)
 pandas>=2.0.0
 
+# Excel 原生工作簿写出引擎 (pandas.to_excel 的 xlsx 依赖, CSV 次级同步必需)
+openpyxl>=3.1.0
+
 # 配置文件隔离, 避免连接串硬编码入库
 python-dotenv>=1.0.0

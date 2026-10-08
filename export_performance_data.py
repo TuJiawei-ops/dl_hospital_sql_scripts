@@ -31,6 +31,11 @@
  CSV 编码 : utf-8-sig (UTF-8 带 BOM, 保障 Excel 双击直开不乱码)
  单元格格式: 编码/日期等文本语义列逐值包裹 ="VALUE", Excel 打开即锁定为文本,
            杜绝前导零丢失 (0101 → 1) 与长数字串科学计数法失真; 数值列裸输出。
+ 次级同步 : 全部 CSV 导出完成后, 于 ./{TIMESTAMP}_.../Excel工作簿/ 同步生成同名
+            .xlsx 原生工作簿 (业务人员双击即用), 自动清洗 ='VALUE' 文本锁定
+            公式还原为纯净文本单元格; CSV 根目录层级与内容零改动。
+            xlsx 端执行「强类型对齐」: 维度/编码列锁文本 (保前导零), 度量/金额/
+            系数列还原为 float/int 原生数值 (框选即可 SUM 求和, 绿三角警告关停)。
 
  关键技术决策
  ------------
@@ -74,6 +79,8 @@
  2026-09-30 14:00:00 | 增量修补 | 新增数值科学计数法拦截: 新增 is_numeric_like / normalize_decimal / format_numeric_value 数值展开层 (零值归一 '0', 非零按源 DECIMAL(18,8) 刻度 quantize 8 位展开, float 走 Decimal(repr) 防二进制舍入, NaN/Inf 原样字符串化); row_to_csv_record 重构为文本锁定/数值展开两路互斥分流, 字符串永不进入数值嗅探; format_text_cell 的 Decimal 分支复用 format_numeric_value; 新增 NUMERIC_SCALE_DIGITS / EXCEL_NUMERIC_SIGNIFICANT_DIGITS 常量。
  2026-10-05 16:30:00 | 增量修补 | 任务扩展 7→9 项: 新增常量 TASK9_SQL_RELATIVE_PATH 与列契约字典 EMP_PERFORMANCE_COLS (18 列, 对齐 ADS_EMP_MONTHLY_PERFORMANCE_M DDL 物理声明序); build_export_tasks() 追加任务 8 (dbo.ads_emp_monthly_performance_m, 显式列清单) 与任务 9 (直读 analyses/核算单元月度绩效测算与实际发放对比表.sql, columns=None 透传中文别名); 1~7 项任务及 row_to_csv_record / format_numeric_value / build_text_column_flags 底层逻辑零改动。
  2026-10-05 16:45:00 | 文档纠偏 | 修正头部清单任务 4 列数笔误 (23 列 → 29 列, 按 DIM_PRF_ITEM_RVU_VERSION DDL 实体列数校准); 同步将「7 项」表述更新为「9 项」并补录任务 8/9 清单行。
+ 2026-10-07 10:00:00 | 增量扩展 | 新增 CSV 次级同步: 常量 EXCEL_SUB_DIR_NAME 与函数 convert_csv_to_xlsx (全列 dtype=str + keep_default_na=False, 正则清洗 ="VALUE" 文本锁定公式还原纯文本, 落盘引擎 openpyxl); PerformanceDataExporter 新增 export_excel_books 于全量 CSV 导出后统一转换至 {OUTPUT_DIR}/Excel工作簿/; 1~9 项任务 csv 逻辑与 row_to_csv_record / format_numeric_value 零改动。
+ 2026-10-07 14:30:00 | 增量修补 | xlsx 强类型对齐 (修复度量列被全量锁文本致无法 SUM): 新增 is_xlsx_text_column 六级精确分流 (与 csv 链路 TEXT_LOCK_* 严格分层: 全字白名单 → 度量语义否决集 → ASCII 词边界 → 英文语义后缀/全字名 → 中文语义子串), 根治 '差异比例_百分比'(NO 子串) 误锁与 'staff_sequence'(VARCHAR(50) 语义列) 误转数值双陷阱; 新增 apply_xlsx_cell_types 写出后置定型 (文本列置 number_format='@' 豁免绿三角并声明字符串类型杜绝 '=' 公式残留, 因 openpyxl 3.1.5 未实现 <ignoredErrors> 写出故弃用 IgnoredError 方案); convert_csv_to_xlsx 度量列改走 to_numeric 单值降级 + assign 合并赋值 (规避 NaN 整列覆盖); 常量族新增 XLSX_TEXT_LOCK_EXACT / XLSX_TEXT_LOCK_SUBSTRINGS / XLSX_TEXT_SUFFIXES / XLSX_TEXT_EXACT_NAMES / XLSX_TEXT_LOCK_ASCII_PATTERN / XLSX_NUMERIC_KEYWORDS / XLSX_NUMERIC_COLUMN_NAMES / EXCEL_TEXT_NUMBER_FORMAT; csv 主链路 0 行改动。
 =================================================================================
 """
 
@@ -129,6 +136,60 @@ TIMESTAMP: str = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 # 输出目录名
 OUTPUT_DIR_NAME: str = f"{TIMESTAMP}_大连市皮肤病医院绩效核算"
+
+# 次级同步子目录名 (Excel 工作簿落盘位置, 相对输出根目录下一级)
+EXCEL_SUB_DIR_NAME: str = "Excel工作簿"
+
+# csv 文本锁定公式还原模式: 命中 ="VALUE" 形态时剥离 ="/" 边框为纯文本
+TEXT_LOCK_FORMULA_PATTERN: str = r'^="([^"]*)"$'
+
+# ---- XLSX 强类型判定 (与 csv 文本锁定严格分层, 严禁混用) ----
+# csv 链路用 TEXT_LOCK_* (宁可锁错保前导零); xlsx 链路需精确分流, 因 Excel 端要求
+# 度量列可求和, 一旦被 NO/ID 子串误命中锁定即丧失 SUM 能力 (如 差异比例_百分比 含 'NO')。
+#
+# 优先级 1: 全字匹配命中 -> 必文本 (真实列头: 核算年份/核算月份/核算单元编码/series_code...)
+XLSX_TEXT_LOCK_EXACT: Tuple[str, ...] = (
+    "核算年份", "核算月份", "核算单元编码", "核算单元名称",
+    "员工编码", "员工姓名", "员工工号",
+    "所属职系编码", "所属职系名称",
+    "岗位物理编码", "职务标签名称", "员工序列",
+    "核算项编码", "核算项名称", "项目编码", "项目名称",
+    "绩效大类编码", "绩效大类名称", "日期类型编码", "日期类型名称",
+    "备注", "创建时间", "计算过程描述", "计算过程说明", "数值口径", "执行角色",
+)
+# 优先级 2: 子串命中 -> 文本 (ASCII 关键字按词边界匹配, 杜绝 PERFORMANCE 误命中 NORM)
+XLSX_TEXT_LOCK_SUBSTRINGS: Tuple[str, ...] = (
+    "编码", "代码", "工号", "编号", "名称", "日期", "时间", "年份", "月份", "职系",
+)
+# 优先级 2: 英文文本语义后缀 (snake_case 列名全段匹配, 如 UNIT_NAME / SERIES_CODE)
+XLSX_TEXT_SUFFIXES: Tuple[str, ...] = (
+    "CODE", "NAME", "TYPE", "SEQ", "SEQUENCE", "DESC", "REMARK", "NO", "DATE", "TIME", "YEAR", "MONTH",
+)
+# 优先级 2: 英文文本语义全字名 (无后缀的整列名)
+XLSX_TEXT_EXACT_NAMES: Tuple[str, ...] = ("YEAR", "MONTH", "REMARK")
+# 优先级 2: ASCII 关键字 (正则词边界匹配, 命中 CODE/NO/DATE/TIME/ID/YEAR/MONTH)
+XLSX_TEXT_LOCK_ASCII_PATTERN: str = r"(?<![A-Za-z])(?:CODE|NO|DATE|TIME|ID|YEAR|MONTH)(?![A-Za-z])"
+# 优先级 3: 度量语义否决集 -> 强制数值 (含百分/金额/系数/比例/差异等测算语义)
+XLSX_NUMERIC_KEYWORDS: Tuple[str, ...] = (
+    "百分", "金额", "总额", "合计", "比例", "系数", "点数", "积分",
+    "数量", "单价", "差异", "绩效", "权重", "单价", "工作量",
+)
+# 优先级 3: 度量列英文契约名 (EMP_PERFORMANCE_COLS 度量族 + 事实层物理名)
+XLSX_NUMERIC_COLUMN_NAMES: Tuple[str, ...] = (
+    "PERFORMANCE_BONUS", "MANAGEMENT_PERFORMANCE", "TOTAL_PERFORMANCE",
+    "FIXED_PERFORMANCE", "PERFORMANCE_AFTER_FIXED_DEDUCTION",
+    "FINAL_VALUE", "RVU_VAL", "TOTAL_QTY", "UNIT_PRICE", "QTY", "AMOUNT",
+    "PERF_COEFF", "EXEC_RATIO", "DECISION_COFF", "EXEC_COFF",
+)
+
+# Excel 内置文本格式 (number_format='@'): 文本列豁免「以文本存储的数字」绿三角警告
+EXCEL_TEXT_NUMBER_FORMAT: str = "@"
+
+# 模块级兜底日志器名 (供无 logger 注入的工具函数告警使用, 与控制台日志器同名同源)
+FALLBACK_LOGGER_NAME: str = "export_performance_data"
+
+# 模块级兜底日志器 (未初始化 handler 时告警走 lastResort 输出, 便于函数独立复用)
+_FALLBACK_LOG: logging.Logger = logging.getLogger(FALLBACK_LOGGER_NAME)
 
 # 任务 1 的 SQL 源文件 (项目内相对路径)
 TASK1_SQL_RELATIVE_PATH: str = "analyses/01_报表_一次分配明细业务视图.sql"
@@ -306,6 +367,177 @@ def row_to_csv_record(row: Sequence[object], text_flags: Sequence[bool]) -> List
         elif cell is not None and is_numeric_like(cell):
             cells[idx] = format_numeric_value(cell)
     return cells
+
+
+def is_xlsx_text_column(column_name: str) -> bool:
+    """
+    判定列在 XLSX 强类型写出时是否锁定为「纯文本」。
+
+    与 csv 链路 is_text_lock_column 严格分层: csv 侧宁可误锁 (保前导零不丢),
+    xlsx 侧必须精确分流 (误锁则度量列丧失 Excel SUM 能力)。
+
+    优先级
+    ------
+    1. 全字命中 XLSX_TEXT_LOCK_EXACT      -> 文本 (账期/编码/名称等维表列)
+    2. 命中度量语义否决集 XLSX_NUMERIC_*   -> 数值 (差异比例_百分比 含 'NO' 亦不锁)
+    3. ASCII 关键字按词边界命中            -> 文本 (杜绝 PERFORMANCE 误命中 NORM)
+    4. 英文文本语义后缀 / 全字名命中        -> 文本 (UNIT_NAME / STAFF_SEQUENCE 等)
+    5. 中文文本语义子串命中                -> 文本
+    6. 其余                                -> 数值 (由调用方 to_numeric 兜底降级)
+    """
+    name = (column_name or "").strip()
+    if not name:
+        return False
+
+    # 优先级 1: 全字命中 (真实列头白名单)
+    if name in XLSX_TEXT_LOCK_EXACT:
+        return True
+
+    # 优先级 2: 度量语义否决 (先于子串判定, 防 'NO' 子串劫持度量列)
+    if any(kw in name for kw in XLSX_NUMERIC_KEYWORDS):
+        return False
+    if name.upper() in XLSX_NUMERIC_COLUMN_NAMES:
+        return False
+
+    # 优先级 3: ASCII 关键字按词边界匹配 (CODE/NO/DATE/TIME/ID/YEAR/MONTH)
+    upper = name.upper()
+    if re.search(XLSX_TEXT_LOCK_ASCII_PATTERN, upper):
+        return True
+
+    # 优先级 4: 英文文本语义后缀 / 全字名 (snake_case 段末匹配, 保 UNIT_NAME 类列锁文本)
+    if upper in XLSX_TEXT_EXACT_NAMES:
+        return True
+    if upper.rsplit("_", 1)[-1] in XLSX_TEXT_SUFFIXES:
+        return True
+
+    # 优先级 5: 中文文本语义子串
+    return any(kw in name for kw in XLSX_TEXT_LOCK_SUBSTRINGS)
+
+
+def apply_xlsx_cell_types(xlsx_path: Path, text_columns: Sequence[str]) -> None:
+    """
+    写出后置强类型定型: 文本列强制「文本单元格 + 文本数字格式」, 杜绝公式与误判。
+
+    参数
+    ----
+    xlsx_path    : 已写出的 XLSX 物理路径
+    text_columns : 判定为文本语义的列名序列
+
+    说明
+    ----
+    1. number_format='@' (Excel 内置 Text 格式) 是 Excel「以文本存储的数字」错误检查的
+       显式豁免指示器, 对文本型编码列关闭/弱化绿三角警告, 保障业务视图零干扰。
+       (实测 openpyxl 3.1.5 未实现 <ignoredErrors> 节点写出, 故不采用 IgnoredError 方案)
+    2. 单元格显式声明为字符串类型 (t="s" 半态 -> inlineStr 落盘), 杜绝 '=' 前缀被 Excel
+       静默解析为公式 (如 ="0101" 清洗后若残留 '=' 会被当成公式声明符)。
+    3. 只操作单元格类型与格式元数据, 不改写任何数据值, 血缘零扰动。
+    """
+    try:
+        import openpyxl
+    except ImportError:                                       # 依赖缺失由 to_excel 阶段统一告警
+        return
+
+    workbook = openpyxl.load_workbook(xlsx_path)
+    worksheet = workbook.active
+    if worksheet is None:
+        return
+
+    text_column_set = set(text_columns)
+    for row in worksheet.iter_rows():
+        for cell in row:
+            if not isinstance(cell.value, str):
+                continue
+            cell.data_type = "s"                              # 字符串落盘, 阻断 '=' 公式解析
+            if str(worksheet.cell(row=1, column=cell.column).value) in text_column_set:
+                cell.number_format = EXCEL_TEXT_NUMBER_FORMAT  # 文本列豁免绿三角
+
+    workbook.save(xlsx_path)
+
+
+
+def convert_csv_to_xlsx(csv_path: Path, xlsx_path: Path) -> bool:
+    """
+    将单个 CSV 文件同步另存为「强类型对齐」的原生 XLSX 工作簿 (次级同步, 只读源 CSV)。
+
+    参数
+    ----
+    csv_path  : 已导出的源 CSV 物理路径 (utf-8-sig)
+    xlsx_path : 目标 XLSX 物理路径 (父目录不存在时自动创建)
+
+    返回
+    ----
+    bool: True 转换成功; False 转换被跳过 (依赖缺失 / 读取写出异常)
+
+    强类型分流
+    ----------
+    维度/编码列 (is_xlsx_text_column 为真): 剥离 ="VALUE" 边框后以纯字符串写入, 保前导零;
+    度量/金额/系数列 (其余列)            : to_numeric 还原为 float/int 原生数值,
+                                          业务人员框选即可 SUM 求和, 并关闭绿三角警告。
+
+    说明
+    ----
+    1. 全列以 dtype=str + keep_default_na=False 读取, 读取阶段零前导零损失。
+    2. 数值列转换失败的单个值降级为空单元格, 严禁 NaN 整列覆盖其他有效数值。
+    3. 转换失败只告警并清理半成品, 不回退 CSV 产物、不改变任务状态与退出码。
+    """
+    try:
+        import pandas as pd
+    except ImportError as exc:                                # 依赖缺失降级: 不阻断主流程
+        _FALLBACK_LOG.warning(
+            "[Excel转换跳过] 缺少依赖 pandas (%s), 已跳过 %s; 请执行 pip install pandas openpyxl",
+            exc,
+            csv_path.name,
+        )
+        return False
+
+    try:
+        # dtype=str 全列字符串化: 编码/工号/日期类前导零与长数字串零失真
+        df = pd.read_csv(csv_path, dtype=str, keep_default_na=False, encoding=CSV_ENCODING)
+
+        numeric_frames: Dict[str, object] = {}
+        for col in df.columns:
+            # 剥离 csv 链路的 ="VALUE" 文本锁定边框 (无边框列原样保留)
+            cleaned = df[col].astype(str).str.replace(TEXT_LOCK_FORMULA_PATTERN, r"\1", regex=True)
+
+            if is_xlsx_text_column(col):
+                df[col] = cleaned                              # 维度列: 纯文本, 锁定前导零
+                continue
+
+            # 度量列: 整列一次 to_numeric, 转换失败单值降级为空 (严禁 NaN 覆盖其他有效值)
+            numeric_series = pd.to_numeric(cleaned, errors="coerce")
+            if bool(numeric_series.notna().any()):
+                numeric_frames[col] = numeric_series.where(numeric_series.notna(), None)
+            else:                                              # 全列无有效数值 -> 安全退回原文
+                df[col] = cleaned
+
+        # 统一赋值, 规避逐列就地修改触发的 pandas 分段赋值告警
+        if numeric_frames:
+            df = df.assign(**numeric_frames)
+
+        xlsx_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_excel(xlsx_path, index=False, engine="openpyxl")
+
+        # 后置定型: 关停文本列绿三角警告 + 声明字符串类型杜绝 '=' 公式残留
+        text_columns = [col for col in df.columns if is_xlsx_text_column(col)]
+        apply_xlsx_cell_types(xlsx_path, text_columns)
+        return True
+
+    except ImportError as exc:                                # openpyxl 缺失 (to_excel 引擎)
+        _FALLBACK_LOG.warning(
+            "[Excel转换跳过] 缺少 Excel 写出引擎 openpyxl (%s), 已跳过 %s; 请执行 pip install openpyxl",
+            exc,
+            csv_path.name,
+        )
+    except Exception as exc:                                  # 转换失败不影响 CSV 交付
+        _FALLBACK_LOG.warning("[Excel转换跳过] %s 转 XLSX 失败: %s", csv_path.name, exc)
+
+    # 失败兜底: 清理可能产生的半成品 XLSX, 杜绝残留脏工作簿
+    if xlsx_path.exists():
+        try:
+            xlsx_path.unlink()
+        except OSError:                                       # pragma: no cover - 防御性
+            pass
+    return False
 
 
 # ---------------------------------------------------------------------------------
@@ -1021,6 +1253,50 @@ class PerformanceDataExporter:
 
         return row_count
 
+    # ---- 次级同步: CSV -> Excel 工作簿 ----
+
+    def export_excel_books(self) -> int:
+        """
+        将已导出的 CSV 逐项同步转换为同名 XLSX 工作簿 (次级同步, 零侵入 CSV 逻辑)。
+
+        输出位置: {输出根目录}/Excel工作簿/{同前缀同名}.xlsx
+
+        返回
+        ----
+        int: 转换成功的 XLSX 文件数
+
+        说明: 仅对本次运行中 SUCCESS 的任务产物执行; 单项转换失败只告警计数,
+              既不回退 CSV 产物, 也不改变任务状态与退出码。
+        """
+        excel_dir = self._output_dir / EXCEL_SUB_DIR_NAME
+        self._log.info("-" * 96)
+        self._log.info("[次级同步] 开始生成 Excel 工作簿 -> %s", excel_dir)
+
+        success = 0
+        for r in sorted(self._results, key=lambda x: x.order):
+            if r.status != "SUCCESS":
+                self._log.warning("[次级同步] 跳过任务 %d [%s]: CSV 未成功导出", r.order, r.file_prefix)
+                continue
+
+            csv_path = self._output_dir / r.file_name
+            if not csv_path.exists():
+                self._log.warning("[次级同步] 跳过任务 %d: 源 CSV 不存在 (%s)", r.order, r.file_name)
+                continue
+
+            # 后缀替换 .csv -> .xlsx, 主文件名与时间戳前缀严格同源
+            xlsx_path = excel_dir / (r.file_name.rsplit(".", 1)[0] + ".xlsx")
+            if convert_csv_to_xlsx(csv_path, xlsx_path):
+                success += 1
+                self._log.info("[次级同步] 生成成功: %s", xlsx_path.name)
+
+        self._log.info(
+            "[次级同步] 完成: 成功 %d / 共 %d 项 (目录: %s)",
+            success,
+            len(self._results),
+            excel_dir,
+        )
+        return success
+
     # ---- 汇总输出 ----
 
     @property
@@ -1119,6 +1395,8 @@ def run() -> int:
             active_exporter.ensure_output_dir()
             for task in tasks:
                 active_exporter.export_task(task)
+            # 全量 CSV 交付完成后执行次级同步, 生成 Excel 工作簿子目录
+            active_exporter.export_excel_books()
     except Exception as exc:
         logger.error("[致命异常] 导出流程中断: %s", exc, exc_info=True)
         if exporter is not None and exporter.results:
