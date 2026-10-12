@@ -9,7 +9,7 @@
 
  功能概述
  --------
- 连接本地 SQL Server 绩效库 hospital_performance_dalian_derma, 一次性导出 9 项
+ 连接本地 SQL Server 绩效库 hospital_performance_dalian_derma, 一次性导出 10 项
  绩效核算基础数据为 UTF-8-BOM (utf-8-sig) 编码的 CSV 文件, 供 Excel / 业务人员
  直接打开核对, 零乱码、零二次转换。
 
@@ -22,6 +22,7 @@
    任务 7  绩效核算日历维度表                 -> dbo.DIM_WORK_CALENDAR                   (11 列, 实体源自 20260915_create_dim_work_calendar.sql)
    任务 8  个人月度绩效金额明细表             -> dbo.ads_emp_monthly_performance_m        (18 列, 按 DDL 声明序对齐)
    任务 9  核算单元月度绩效测算与实际发放对比表 -> analyses/核算单元月度绩效测算与实际发放对比表.sql (纯 SELECT 直执行)
+   任务 10 专项激励配置表                    -> dbo.dim_prf_special_incentive              (12 列, 按 DDL 声明序对齐)
 
 
  输出目录规范
@@ -39,7 +40,7 @@
 
  关键技术决策
  ------------
- 1. 【只读声明】全部 9 项任务均为纯只读 SELECT, 零 INSERT / UPDATE / DELETE /
+ 1. 【只读声明】全部 10 项任务均为纯只读 SELECT, 零 INSERT / UPDATE / DELETE /
      TRUNCATE / DDL 副作用, 对生产库绝对零写入。
  2. 【占位符零注入】任务 1 与任务 9 的 SQL 不含 '{year}' / '{month}' / {struct_codes} 等
     模板占位符 (业务全量透视视图), 故本脚本无需任何参数替换动作, 直接整段执行;
@@ -81,6 +82,7 @@
  2026-10-05 16:45:00 | 文档纠偏 | 修正头部清单任务 4 列数笔误 (23 列 → 29 列, 按 DIM_PRF_ITEM_RVU_VERSION DDL 实体列数校准); 同步将「7 项」表述更新为「9 项」并补录任务 8/9 清单行。
  2026-10-07 10:00:00 | 增量扩展 | 新增 CSV 次级同步: 常量 EXCEL_SUB_DIR_NAME 与函数 convert_csv_to_xlsx (全列 dtype=str + keep_default_na=False, 正则清洗 ="VALUE" 文本锁定公式还原纯文本, 落盘引擎 openpyxl); PerformanceDataExporter 新增 export_excel_books 于全量 CSV 导出后统一转换至 {OUTPUT_DIR}/Excel工作簿/; 1~9 项任务 csv 逻辑与 row_to_csv_record / format_numeric_value 零改动。
  2026-10-07 14:30:00 | 增量修补 | xlsx 强类型对齐 (修复度量列被全量锁文本致无法 SUM): 新增 is_xlsx_text_column 六级精确分流 (与 csv 链路 TEXT_LOCK_* 严格分层: 全字白名单 → 度量语义否决集 → ASCII 词边界 → 英文语义后缀/全字名 → 中文语义子串), 根治 '差异比例_百分比'(NO 子串) 误锁与 'staff_sequence'(VARCHAR(50) 语义列) 误转数值双陷阱; 新增 apply_xlsx_cell_types 写出后置定型 (文本列置 number_format='@' 豁免绿三角并声明字符串类型杜绝 '=' 公式残留, 因 openpyxl 3.1.5 未实现 <ignoredErrors> 写出故弃用 IgnoredError 方案); convert_csv_to_xlsx 度量列改走 to_numeric 单值降级 + assign 合并赋值 (规避 NaN 整列覆盖); 常量族新增 XLSX_TEXT_LOCK_EXACT / XLSX_TEXT_LOCK_SUBSTRINGS / XLSX_TEXT_SUFFIXES / XLSX_TEXT_EXACT_NAMES / XLSX_TEXT_LOCK_ASCII_PATTERN / XLSX_NUMERIC_KEYWORDS / XLSX_NUMERIC_COLUMN_NAMES / EXCEL_TEXT_NUMBER_FORMAT; csv 主链路 0 行改动。
+ 2026-10-12 15:00:00 | 增量扩展 | 任务扩展 9→10 项: 新增列契约字典 SPECIAL_INCENTIVE_COLS (12 列, 对齐 dim_prf_special_incentive DDL 物理声明序) 与任务 10 (dbo.dim_prf_special_incentive 专项激励配置表); 1~9 项任务与导出引擎零改动。
 =================================================================================
 """
 
@@ -723,6 +725,24 @@ EMP_PERFORMANCE_COLS: Dict[str, str] = {
     "create_time": "创建时间",
 }
 
+# ---- 任务 10: 专项激励配置表 (dbo.dim_prf_special_incentive) ----
+# 列序严格对齐 sqlserver/dim_prf_special_incentive.sql 的 DDL 物理声明顺序 (共 12 列),
+# 中文别名取字段级扩展属性 (MS_Description) 的规范注释口径。
+SPECIAL_INCENTIVE_COLS: Dict[str, str] = {
+    "org_code": "机构编码",
+    "org_name": "机构名称",
+    "item_code": "项目编码",
+    "item_name": "项目名称",
+    "effective_date": "生效日期",
+    "expire_date": "失效日期",
+    "incentive_money": "专项激励金额",
+    "remark": "备注",
+    "create_user": "创建人",
+    "create_time": "创建时间",
+    "update_user": "最后修改人",
+    "update_time": "最后修改时间",
+}
+
 
 # ---------------------------------------------------------------------------------
 # 3. 导出任务契约 (Export Task Contract)
@@ -736,7 +756,7 @@ class ExportTask:
 
     属性
     ----
-    order        : 任务序号 (1..7), 用于控制台进度编排与日志排序
+    order        : 任务序号 (1..10), 用于控制台进度编排与日志排序
     file_prefix  : CSV 文件名业务后缀 (最终文件名 = f"{TIMESTAMP}_{file_prefix}.csv")
     describe     : 业务中文描述 (日志与异常提示)
     columns      : 列映射契约 {物理列名: 中文别名}; 为 None 时表示列头完全由 SQL 结果集决定
@@ -772,7 +792,7 @@ class ExportTask:
         if self.sql_file is not None:
             return load_select_sql_from_file(self.sql_file)
 
-        # 路径 B: 按列契约组装显式列清单 SELECT (任务 2~7)
+        # 路径 B: 按列契约组装显式列清单 SELECT (任务 2~8, 10)
         if not self.columns or not self.table_name:
             raise RuntimeError(
                 f"[任务 {self.order}] 契约不完整: 必须提供 sql_file 或 (columns + table_name)。"
@@ -975,7 +995,7 @@ def setup_console_logger() -> logging.Logger:
 
 def build_export_tasks() -> List[ExportTask]:
     """
-    装配 9 项导出任务清单。
+    装配 10 项导出任务清单。
 
     返回
     ----
@@ -1053,6 +1073,14 @@ def build_export_tasks() -> List[ExportTask]:
             describe=f"核算单元月度绩效测算与实际发放对比表 (源: {TASK9_SQL_RELATIVE_PATH})",
             columns=None,           # 列头由 SQL 内部中文别名决定, 直接透传结果集列名
             sql_file=TASK9_SQL_RELATIVE_PATH,
+        ),
+        # ---- 任务 10: 专项激励配置表 ----
+        ExportTask(
+            order=10,
+            file_prefix="专项激励配置表",
+            describe="专项激励配置表 (源: dbo.dim_prf_special_incentive)",
+            columns=SPECIAL_INCENTIVE_COLS,
+            table_name=f"[{DB_SCHEMA}].[dim_prf_special_incentive]",
         ),
     ]
 
