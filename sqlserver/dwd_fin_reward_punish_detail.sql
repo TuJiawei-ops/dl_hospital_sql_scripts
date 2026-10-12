@@ -16,8 +16,9 @@ Relative Path : sqlserver/dwd_fin_reward_punish_detail.sql
 单表双模     : metric_type 统一承载两类度量（AMOUNT 金额/元、SCORE 分数/分）：奖励金与罚款、
                加分与扣分共用一张事实表、一套 API、一条二次分配链路，杜绝“分数表 + 金额表”双表冗余；
                下游汇总必须先行按 metric_type 分组，严禁跨量纲直接相加。
-数值符号约定 : amount 为最终奖惩值，奖励（奖励金/加分）为正、惩罚（罚款/扣分）为负（符号由录入侧
-               保证，物理层不再二次取反）；unit_price / quantity / amount 三列统一 DECIMAL(18,8)，
+数值符号约定 : unit_price / amount 一律录入正数绝对值（物理层 CHECK >= 0 硬约束，严禁负数），
+               加减性质完全由 category（REWARD 加 / PUNISH 减）与 metric_type（AMOUNT 元 / SCORE 分）
+               决定，从数据库内核根绝“负负得正”与财务加减错乱事故；三列统一 DECIMAL(18,8)，
                对齐全局精度强制标准（AMOUNT 记为元，SCORE 记为分，量纲由 metric_type 唯一决定）。
 编码字段语义 : org_code / unit_code / staff_code / item_cat_code / item_code 全量 VARCHAR 字符串语义，
                严禁 CAST 为 INT/BIGINT（防前导零丢失与跨表 JOIN 关联失配）。
@@ -27,6 +28,7 @@ Relative Path : sqlserver/dwd_fin_reward_punish_detail.sql
 会话无关性   : 无 DATEFIRST / LANGUAGE 会话依赖。
 模板占位符   : 无（纯 DDL，不含 '{year}' / '{month}' / '{start_time}' / '{end_time}' / {struct_codes} 动态注入）。
 修改日志：
+2026-10-12 18:30:00 | 约束升级 | [unit_price]/[amount] 新增 CHECK >= 0.00000000 非负绝对值硬约束（ck_dwd_fin_reward_punish_detail_unit_price / ck_dwd_fin_reward_punish_detail_amount）；符号口径由「奖励正惩罚负」改为「一律正数绝对值 + category 定加减」；表级与字段级扩展属性、5.1/5.3 示例、5.4 净额汇总算式同步改口径。
 2026-10-12 17:00:00 | 架构升级 | 引入单表双模度量字段 [metric_type] VARCHAR(20) NOT NULL（默认 AMOUNT，CHECK 锁定 AMOUNT/SCORE）；[amount]/[unit_price] 语义升格为「金额或分值」通用奖惩值，扩展属性与示例同步补录 SCORE 模式；覆盖索引 INCLUDE 增补 metric_type。
 2026-10-12 16:00:00 | 初始建表 | 新建综合奖惩明细事实表：自增 id 聚簇主键 + (账期,科室,员工) 覆盖检索索引 + staff 维度可空兼容科室/个人两级奖惩 + category 与 item_cat* 双重分类 + 全字段中文扩展属性；金额精度锁定 DECIMAL(18,8)；全脚本零 GO 单批执行。
 ================================================================================
@@ -70,10 +72,10 @@ CREATE TABLE [dbo].[dwd_fin_reward_punish_detail] (
     [category]       VARCHAR(20)    NOT NULL,                           -- 奖惩方向（REWARD：奖励/加分，PUNISH：惩罚/扣款）
     [metric_type]    VARCHAR(20)    NOT NULL CONSTRAINT df_dwd_fin_reward_punish_detail_metric_type DEFAULT ('AMOUNT'), -- 度量类型（AMOUNT：金额/元，SCORE：分数/分）
 
-    -- ===== 数值与计量标准（单表双模：金额与分值同列承载，量纲由 metric_type 决定）=====
-    [unit_price]     DECIMAL(18,8)  NOT NULL DEFAULT (0.00000000),      -- 标准值（AMOUNT：元/次；SCORE：分/次）
+    -- ===== 数值与计量标准（单表双模：金额与分值同列承载，量纲由 metric_type 决定；一律正数绝对值）=====
+    [unit_price]     DECIMAL(18,8)  NOT NULL DEFAULT (0.00000000),      -- 标准值（AMOUNT：元/次；SCORE：分/次；正数绝对值，严禁负数）
     [quantity]       DECIMAL(18,8)  NOT NULL DEFAULT (1.00000000),      -- 数量/频次
-    [amount]         DECIMAL(18,8)  NOT NULL DEFAULT (0.00000000),      -- 最终奖惩值（AMOUNT=金额(元)，SCORE=分值(分)；奖励为正，惩罚为负）
+    [amount]         DECIMAL(18,8)  NOT NULL DEFAULT (0.00000000),      -- 最终奖惩值（AMOUNT=金额(元)，SCORE=分值(分)；正数绝对值，加减由 category 决定）
 
     -- ===== 说明与审计字段 =====
     [remark]         NVARCHAR(1000) NULL,                               -- 事由与备注说明
@@ -91,7 +93,11 @@ CREATE TABLE [dbo].[dwd_fin_reward_punish_detail] (
     CONSTRAINT [ck_dwd_fin_reward_punish_detail_category] CHECK ([category] IN ('REWARD', 'PUNISH')),
 
     -- ===== 度量类型枚举约束（单表双模：锁定 AMOUNT 金额 / SCORE 分数二值语义）=====
-    CONSTRAINT [ck_dwd_fin_reward_punish_detail_metric_type] CHECK ([metric_type] IN ('AMOUNT', 'SCORE'))
+    CONSTRAINT [ck_dwd_fin_reward_punish_detail_metric_type] CHECK ([metric_type] IN ('AMOUNT', 'SCORE')),
+
+    -- ===== 非负绝对值约束（内核级杜绝负数录入，加减性质交由 category 决定）=====
+    CONSTRAINT [ck_dwd_fin_reward_punish_detail_unit_price] CHECK ([unit_price] >= 0.00000000),
+    CONSTRAINT [ck_dwd_fin_reward_punish_detail_amount] CHECK ([amount] >= 0.00000000)
 );
 
 -- ================================================================
@@ -108,7 +114,7 @@ CREATE NONCLUSTERED INDEX [ix_dwd_fin_reward_punish_detail_lookup]
 --    第 1 区块已 DROP TABLE 重建，表级绑定扩展属性被物理层同步清除，
 --    故此处顺序执行 sp_addextendedproperty，无需任何 IF EXISTS 守卫
 -- ================================================================
-EXEC sp_addextendedproperty N'MS_Description', N'综合奖惩明细事实表（单表双模）：一张表兼容一次分配（科室级，staff 为空）与二次分配（个人级，staff 有值）；category 承载奖惩方向，metric_type 承载度量类型（AMOUNT 金额/元、SCORE 分数/分），item_cat_code 承载业务大类；数值精度 DECIMAL(18,8)，奖励为正惩罚为负；下游汇总须先按 metric_type 分组，严禁跨量纲相加', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail';
+EXEC sp_addextendedproperty N'MS_Description', N'综合奖惩明细事实表（单表双模）：一张表兼容一次分配（科室级，staff 为空）与二次分配（个人级，staff 有值）；category 承载奖惩方向，metric_type 承载度量类型（AMOUNT 金额/元、SCORE 分数/分），item_cat_code 承载业务大类；所有金额与分值统一录入正数绝对值（受 CHECK (unit_price >= 0) 与 CHECK (amount >= 0) 物理约束），严禁录入负数，加减性质由 category 决定；数值精度 DECIMAL(18,8)；下游汇总须先按 metric_type 分组，严禁跨量纲相加', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail';
 EXEC sp_addextendedproperty N'MS_Description', N'自增代理主键（单列聚簇，物理唯一寻址；不使用业务复合主键，因 staff_code 允许为空且同一科室同一天可存在多笔同类奖惩）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'id';
 EXEC sp_addextendedproperty N'MS_Description', N'核算年份（如 2026）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'calc_year';
 EXEC sp_addextendedproperty N'MS_Description', N'核算月份（如 10）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'calc_month';
@@ -125,9 +131,9 @@ EXEC sp_addextendedproperty N'MS_Description', N'奖惩项目编码（NOT NULL�
 EXEC sp_addextendedproperty N'MS_Description', N'奖惩项目名称（NOT NULL，业务可读的奖惩事项名称）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'item_name';
 EXEC sp_addextendedproperty N'MS_Description', N'奖惩方向（NOT NULL，受 CHECK 约束锁定二值：REWARD 奖励/加分、PUNISH 惩罚/扣款）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'category';
 EXEC sp_addextendedproperty N'MS_Description', N'度量类型（NOT NULL，默认 AMOUNT，受 CHECK 约束锁定二值：AMOUNT 金额（单位：元，如奖励 500 元、罚款 200 元）、SCORE 分数（单位：分，如质控扣 2 分、服务标兵加 5 分））；单表双模设计：分数奖惩与金额奖惩共用一张事实表/一套 API/一条二次分配链路，杜绝双表冗余与口径漂移，量纲唯一由本列决定', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'metric_type';
-EXEC sp_addextendedproperty N'MS_Description', N'标准值（DECIMAL(18,8) 高精度，默认 0.00000000；量纲由 metric_type 决定：AMOUNT 为元/次，SCORE 为分/次）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'unit_price';
+EXEC sp_addextendedproperty N'MS_Description', N'标准值（DECIMAL(18,8) 高精度，默认 0.00000000；量纲由 metric_type 决定：AMOUNT 为元/次，SCORE 为分/次）；所有金额与分值统一录入正数绝对值（受 CHECK ([unit_price] >= 0) 物理约束），严禁录入负数；加减性质由 category 决定', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'unit_price';
 EXEC sp_addextendedproperty N'MS_Description', N'数量/频次（DECIMAL(18,8) 高精度，默认 1.00000000，支持按次/按人次/按天计量，与 unit_price 同量纲乘积得 amount）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'quantity';
-EXEC sp_addextendedproperty N'MS_Description', N'最终奖惩值（DECIMAL(18,8) 高精度，默认 0.00000000；AMOUNT 时为金额（元），SCORE 时为分值（分）；奖励（奖励金/加分）为正、惩罚（罚款/扣分）为负，符号由录入侧保证，物理层不再二次取反；跨 metric_type 汇总严禁直接相加）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'amount';
+EXEC sp_addextendedproperty N'MS_Description', N'最终奖惩值（DECIMAL(18,8) 高精度，默认 0.00000000；AMOUNT 时为金额（元），SCORE 时为分值（分））；所有金额与分值统一录入正数绝对值（受 CHECK ([amount] >= 0) 物理约束），严禁录入负数，加减性质由 category 决定（REWARD 计入奖励池、PUNISH 计入惩罚池，下游计算净额时按 category 施加符号）；跨 metric_type 汇总严禁直接相加', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'amount';
 EXEC sp_addextendedproperty N'MS_Description', N'事由与备注说明（承载处罚文号、投诉工单号、奖励依据等追溯信息）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'remark';
 EXEC sp_addextendedproperty N'MS_Description', N'创建人（默认 system，业务录入时写明操作人工号）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'create_user';
 EXEC sp_addextendedproperty N'MS_Description', N'创建时间（默认 GETDATE()）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'create_time';
@@ -139,13 +145,13 @@ EXEC sp_addextendedproperty N'MS_Description', N'最后修改时间（默认 GET
 --    单表双模：5.1 / 5.2 为 AMOUNT 金额模式（一次分配科室级 + 二次分配个人级），
 --    5.3 为 SCORE 分数模式；两类记录物理同表，仅由 metric_type 区分量纲。
 -- ================================================================
--- 5.1 科室级金额奖惩（一次分配：staff_code / staff_name 留空，metric_type = AMOUNT）
+-- 5.1 科室级金额奖惩（一次分配：staff_code / staff_name 留空，metric_type = AMOUNT；扣款同样录入正值 2000，方向由 category = PUNISH 表达）
 -- INSERT INTO [dbo].[dwd_fin_reward_punish_detail]
 --     ([calc_year], [calc_month], [record_date], [org_code], [org_name], [unit_code], [unit_name],
 --      [item_cat_code], [item_cat_name], [item_code], [item_name], [category], [metric_type], [unit_price], [quantity], [amount], [remark], [create_user])
 -- VALUES
 --     (2026, 10, '2026-10-09', '1001', N'大连市皮肤病医院', 'D1002', N'皮肤内科', 'ADMIN', N'行政政工类',
---      'ADM_DEPT_PENALTY', N'科室集体行政处罚', 'PUNISH', 'AMOUNT', 2000.00000000, 1.00000000, -2000.00000000, N'院周会通报批评', 'system');
+--      'ADM_DEPT_PENALTY', N'科室集体行政处罚', 'PUNISH', 'AMOUNT', 2000.00000000, 1.00000000, 2000.00000000, N'院周会通报批评', 'system');
 --
 -- 5.2 个人级金额奖励（二次分配：staff_code / staff_name 填写工号与姓名，metric_type = AMOUNT）
 -- INSERT INTO [dbo].[dwd_fin_reward_punish_detail]
@@ -155,19 +161,20 @@ EXEC sp_addextendedproperty N'MS_Description', N'最后修改时间（默认 GET
 --     (2026, 10, '2026-10-12', '1001', N'大连市皮肤病医院', 'D1002', N'皮肤内科', '20260001', N'张三',
 --      'QUALITY', N'医疗质控类', 'QC_REWARD', N'病历书写质控奖励', 'REWARD', 'AMOUNT', 200.00000000, 1.00000000, 200.00000000, N'三季度病历甲级', 'system');
 --
--- 5.3 个人级分数奖惩（metric_type = SCORE：unit_price 为「分/次」，amount 为最终分值，扣分为负）
+-- 5.3 个人级分数奖惩（metric_type = SCORE：unit_price 为「分/次」，amount 为最终分值；扣分同样录入正值 2，方向由 category = PUNISH 表达）
 -- INSERT INTO [dbo].[dwd_fin_reward_punish_detail]
 --     ([calc_year], [calc_month], [record_date], [org_code], [org_name], [unit_code], [unit_name], [staff_code], [staff_name],
 --      [item_cat_code], [item_cat_name], [item_code], [item_name], [category], [metric_type], [unit_price], [quantity], [amount], [remark], [create_user])
 -- VALUES
 --     (2026, 10, '2026-10-12', '1001', N'大连市皮肤病医院', 'D1002', N'皮肤内科', '20260001', N'张三',
---      'QUALITY', N'医疗质控类', 'QC_SCORE_DEDUCT', N'病历书写不规范扣分', 'PUNISH', 'SCORE', -2.00000000, 1.00000000, -2.00000000, N'病历首页缺项', 'system');
+--      'QUALITY', N'医疗质控类', 'QC_SCORE_DEDUCT', N'病历书写不规范扣分', 'PUNISH', 'SCORE', 2.00000000, 1.00000000, 2.00000000, N'病历首页缺项', 'system');
 --
 -- 5.4 账期 × 科室奖惩汇总（按 metric_type 分子池合计，严禁跨量纲相加；覆盖索引零回表）
+--     源列一律正数绝对值，故 net 口径必须按 category 施加符号（PUNISH 取负），严禁裸 SUM(amount) 当净额
 -- SELECT f.[calc_year], f.[calc_month], f.[unit_code], f.[unit_name],
 --        SUM(CASE WHEN f.[metric_type] = 'AMOUNT' AND f.[category] = 'REWARD' THEN f.[amount] ELSE 0.00000000 END) AS [reward_amount],
 --        SUM(CASE WHEN f.[metric_type] = 'AMOUNT' AND f.[category] = 'PUNISH' THEN f.[amount] ELSE 0.00000000 END) AS [punish_amount],
---        SUM(CASE WHEN f.[metric_type] = 'AMOUNT' THEN f.[amount] ELSE 0.00000000 END) AS [net_amount],
---        SUM(CASE WHEN f.[metric_type] = 'SCORE' THEN f.[amount] ELSE 0.00000000 END) AS [net_score]
+--        SUM(CASE WHEN f.[metric_type] = 'AMOUNT' AND f.[category] = 'PUNISH' THEN -f.[amount] ELSE f.[amount] END) AS [net_amount],
+--        SUM(CASE WHEN f.[metric_type] = 'SCORE'  AND f.[category] = 'PUNISH' THEN -f.[amount] ELSE f.[amount] END) AS [net_score]
 -- FROM [dbo].[dwd_fin_reward_punish_detail] AS f
 -- GROUP BY f.[calc_year], f.[calc_month], f.[unit_code], f.[unit_name];
