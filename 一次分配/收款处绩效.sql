@@ -16,6 +16,8 @@
   RVU维表: dbo.[DIM_PRF_ITEM_RVU_VERSION]
            主键 (ORG_CODE, VERSION_NO, PROJ_CODE, MEAS_UNIT)；[RVU_VAL] numeric(12,4) NOT NULL
            当前系统仅存单版本，按 [PROJ_CODE] 1:1 直连；VERSION_NO 退化为快照属性列，零寻址零过滤。
+           全字段投影供 JSON 血缘快照（版本/机构/计费单位/基准单价/手术等级/审计人），
+           [ID] 别名 RVU_ID 防与日志表主键碰撞；金额类列统一 DECIMAL(18,8)。
   落库表 : dbo.[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]（一次分配专用 EAV-Hybrid 日志表）
            业务唯一键 (CALC_YEAR, CALC_MONTH, ITEM_CODE, UNIT_CODE, PROJ_CODE,
                        EXEC_ROLE, STAFF_CODE, DAY_TYPE_CODE) —— 本算子后三维恒为 N'NONE'。
@@ -28,9 +30,12 @@
      维持工作量对账闭环并外显配置缺口，禁止为掩盖配置缺失而静默剔除事实行。
   3. 【零折叠落库】事实层契约保障「一月 × 一单元 × 一细目」仅一行，joined 输出即物理唯一，
      故不设名称收敛链，8 维唯一键 (…, UNIT_CODE, PROJ_CODE, …) 落库无碰撞面。
-  4. 【编码族关联】unit_code / item_code 全为字符串编码族，原值裸引用，无 CAST / 补零改造。
-  5. 【明细层文本化】final 为程序读写倒数第二层，年份/月份强制文本化，上层仅透传不重复叠加 CAST。
-  6. 【账期口径唯一】账期取自 '{year}' / '{month}' 模板参数并与事实层过滤条件同源同参；
+  4. 【RVU 全字段快照】dim_rvu 全字段 1:1 直连（[ID] 别名 RVU_ID 防主键碰撞），CALC_DETAIL_JSON 追加
+     单层嵌套 [RVU配置快照] 节点（23 节点，JSON_QUERY + FOR JSON PATH 按 PROJ_CODE 回读 dim_rvu），
+     留存维度行完整血缘；快照与同级扁平节点互不干扰，父级 WITHOUT_ARRAY_WRAPPER 必须保留。
+  5. 【编码族关联】unit_code / item_code 全为字符串编码族，原值裸引用，无 CAST / 补零改造。
+  6. 【明细层文本化】final 为程序读写倒数第二层，年份/月份强制文本化，上层仅透传不重复叠加 CAST。
+  7. 【账期口径唯一】账期取自 '{year}' / '{month}' 模板参数并与事实层过滤条件同源同参；
      事实层为「账期 + 细目 + 值」三要素导入表、无时间戳流水，故本算子不消费 '{start_time}' / '{end_time}'。
 
   ── 模板占位符（严禁破坏） ──
@@ -39,6 +44,8 @@
   {struct_codes}: 核算单元过滤集 (如 ('100031'))
 
   修改日志
+  2026-10-13 21:05:00 | 编译纠错 | 修正 JSON 快照关联列作用域：final 出口列全为中文别名、无英文列，快照子查询 WHERE 由 f.[PROJ_CODE] 纠正为 f.[项目编码]（原写法在 final 作用域内编译报「列名 'PROJ_CODE' 无效」）；joined 补注事实层 [item_code] ➔ src.PROJ_CODE 别名血缘。
+  2026-10-13 20:20:00 | 结构对齐 | CALC_DETAIL_JSON 恢复「主体汇总 + RVU配置快照」双层嵌套：dim_rvu 恢复全字段 1:1 直连（[ID] 别名 RVU_ID），JSON_QUERY 按 PROJ_CODE 回读追加 23 节点 [RVU配置快照]（时间戳 CONVERT 文本化），对齐标杆《医疗服务项目开单积分.sql》；落库列/算式/第二区块/占位符零改动。
   2026-10-13 18:55:00 | 架构纠偏 | 对齐标杆《医疗服务项目开单积分.sql》：RVU 维表移除 ROW_NUMBER 开窗与 VERSION_NO 'V04' 常量过滤，退化为单版本 1:1 直连；撤 rvu_snap 收敛层、proj_name 名称链与嵌套 [RVU配置快照] 节点，CALC_DETAIL_JSON 收敛为单层扁平；agg 层一次算定 Σ工作量 × 点值；落库列、第二区块契约与占位符零改动。
   2026-10-13 17:40:00 | 脚本新建 | 新建收款处绩效算子：线下导入工作量事实表直连 RVU 点数维表，按(核算单元×细目)汇总工作量乘点值落库 AMOUNT；Envelope 双区块 + 幂等 DELETE。
 =============================================================================== */
@@ -56,18 +63,34 @@ WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
 
 -- 算子计算与落库
 WITH
--- RVU 点数维表（单版本 1:1 直连，仅投影直连属性集）
+-- RVU 点数维表（全字段 1:1 直连；[ID] 别名 RVU_ID 防与日志表主键碰撞）
 dim_rvu AS (
     SELECT
+        v.[VERSION_NO]                                 AS VERSION_NO,
+        v.[VERSION_DESC]                               AS VERSION_DESC,
+        v.[ORG_CODE]                                   AS ORG_CODE,
+        v.[ORG_NAME]                                   AS ORG_NAME,
+        v.[SRC_SYS_CODE]                               AS SRC_SYS_CODE,
         v.[PROJ_CODE]                                  AS PROJ_CODE,
         v.[PROJ_NAME]                                  AS PROJ_NAME,
+        v.[MEAS_UNIT]                                  AS MEAS_UNIT,
+        CAST(v.[RVU_VAL]       AS DECIMAL(18,8))       AS RVU_VAL,
         v.[ITEM_CAT_CODE]                              AS ITEM_CAT_CODE,
         v.[ITEM_CAT_NAME]                              AS ITEM_CAT_NAME,
-        v.[VERSION_NO]                                 AS VERSION_NO,
-        v.[MEAS_UNIT]                                  AS MEAS_UNIT,
-        CAST(v.[RVU_VAL] AS DECIMAL(18,8))             AS RVU_VAL
+        CAST(v.[UNIT_PRICE]    AS DECIMAL(18,8))       AS UNIT_PRICE,
+        v.[OPR_LEVEL_CODE]                             AS OPR_LEVEL_CODE,
+        v.[OPR_LEVEL_NAME]                             AS OPR_LEVEL_NAME,
+        v.[CREATE_USER]                                AS CREATE_USER,
+        v.[CREATE_TIME]                                AS CREATE_TIME,
+        v.[UPDATE_USER]                                AS UPDATE_USER,
+        v.[UPDATE_TIME]                                AS UPDATE_TIME,
+        v.[ID]                                         AS RVU_ID,
+        CAST(v.[DECISION_COFF] AS DECIMAL(18,8))       AS DECISION_COFF,
+        CAST(v.[EXEC_COFF]     AS DECIMAL(18,8))       AS EXEC_COFF,
+        v.[REMARK]                                     AS REMARK,
+        v.[SCORE_REASON]                               AS SCORE_REASON
     FROM dbo.[DIM_PRF_ITEM_RVU_VERSION] AS v WITH (NOLOCK)
-    -- 单版本维表 1:1 直连，仅剔除空项目码
+    -- 单版本维表 1:1 直连，仅剔除空项目码；收款处不做绩效大类剪枝
     WHERE v.[PROJ_CODE] IS NOT NULL
 ),
 
@@ -103,6 +126,7 @@ joined AS (
         CAST(ISNULL(d.[RVU_VAL], 0.00000000) AS DECIMAL(18,8)) AS RVU_VAL,
         s.[WORKLOAD_QTY]                                    AS WORKLOAD_QTY
     FROM src AS s
+    -- 关联键跨层对齐：src 内已把事实层物理列 [item_code] 别名化为 PROJ_CODE，与维表 [PROJ_CODE] 字符串直连
     LEFT JOIN dim_rvu AS d
         ON d.[PROJ_CODE] = s.[PROJ_CODE]
 ),
@@ -159,7 +183,7 @@ final AS (
     FROM agg AS a
 )
 
--- 投影落库（账期常量经 SELECT 投影；CALC_DETAIL_JSON 单层扁平承载主体汇总）
+-- 投影落库（账期常量经 SELECT 投影；CALC_DETAIL_JSON = 主体汇总 + RVU配置快照 双层嵌套）
 INSERT INTO [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
     [CALC_YEAR], [CALC_MONTH], [ITEM_CODE], [ITEM_NAME], [SCRIPT_NAME],
     [UNIT_CODE], [UNIT_NAME], [PROJ_CODE], [PROJ_NAME], [ITEM_CAT_CODE], [ITEM_CAT_NAME], [RVU_VAL],
@@ -205,7 +229,38 @@ SELECT
             CAST(f.[汇总工作量]   AS DECIMAL(18,8))               AS [汇总工作量],
             CAST(f.[单项绩效点数] AS DECIMAL(18,8))               AS [单项RVU点数],
             CAST(f.[收款处绩效]   AS DECIMAL(18,8))               AS [收款处绩效],
-            f.[计算过程]                                          AS [计算过程描述]
+            f.[计算过程]                                          AS [计算过程描述],
+            -- RVU 配置全字段快照（JSON_QUERY 单层嵌套；按 PROJ_CODE 1:1 直连 dim_rvu，零开窗）
+            JSON_QUERY((
+                SELECT
+                    c.[VERSION_NO]       AS [版本号],
+                    c.[VERSION_DESC]     AS [版本描述],
+                    c.[ORG_CODE]         AS [机构编码],
+                    c.[ORG_NAME]         AS [机构名称],
+                    c.[SRC_SYS_CODE]     AS [源系统编码],
+                    c.[PROJ_CODE]        AS [收费项目编码],
+                    c.[PROJ_NAME]        AS [收费项目名称],
+                    c.[MEAS_UNIT]        AS [原始计费单位],
+                    c.[RVU_VAL]          AS [单项绩效点数],
+                    c.[ITEM_CAT_CODE]    AS [绩效核算大类编码],
+                    c.[ITEM_CAT_NAME]    AS [绩效核算大类名称],
+                    c.[UNIT_PRICE]       AS [历史参考单价],
+                    c.[OPR_LEVEL_CODE]   AS [手术等级编码],
+                    c.[OPR_LEVEL_NAME]   AS [手术等级名称],
+                    c.[CREATE_USER]      AS [创建人],
+                    CONVERT(VARCHAR(19), c.[CREATE_TIME], 120) AS [创建时间],
+                    c.[UPDATE_USER]      AS [修改人],
+                    CONVERT(VARCHAR(19), c.[UPDATE_TIME], 120) AS [修改时间],
+                    c.[RVU_ID]           AS [冗余ID],
+                    c.[DECISION_COFF]    AS [诊疗决策系数],
+                    c.[EXEC_COFF]        AS [执行系数],
+                    c.[REMARK]           AS [备注说明],
+                    c.[SCORE_REASON]     AS [评分理由依据]
+                FROM dim_rvu AS c
+                -- 单版本 1:1 直连，仅按项目码回读；final 出口列全为中文别名，关联须用 [项目编码]
+                WHERE c.[PROJ_CODE] = f.[项目编码]
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            ))                                               AS [RVU配置快照]
         FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
     )                                                             AS [CALC_DETAIL_JSON],
     SYSDATETIME()                                                 AS [CREATE_TIME]
