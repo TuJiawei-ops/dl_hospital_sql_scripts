@@ -9,7 +9,7 @@ Relative Path : sqlserver/dwd_fin_charge_workload_detail.sql
                一次分配工作量的唯一事实源。
 粒度         : 自增 id 单行物理唯一；业务粒度 = 核算年月 × 核算单元 × 标准化项目编码，
                一个细目一个月应仅存一行，重复导入必须先删后插（幂等重跑，见下）。
-空值语义     : unit_code / unit_name 强制 NOT NULL 且带 DEFAULT（U0101 / 收费处），
+空值语义     : unit_code / unit_name 强制 NOT NULL 且带 DEFAULT（100031 / 收款处），
                保障一次分配可直接按核算单元映射，无需二次补码；
                org_code / org_name 带 DEFAULT（1001 / 大连市皮肤病医院），导入端可省略机构列；
                batch_no 允许 NULL（历史补录数据可无批次号），remark 允许 NULL。
@@ -36,6 +36,7 @@ Relative Path : sqlserver/dwd_fin_charge_workload_detail.sql
 会话无关性   : 无 DATEFIRST / LANGUAGE 会话依赖。
 模板占位符   : 无（纯 DDL，不含 '{year}' / '{month}' / '{start_time}' / '{end_time}' / {struct_codes} 动态注入）。
 修改日志：
+2026-10-13 18:10:00 | 文档纠偏 | 说明文案对齐物理 DEFAULT：unit_code 默认值 U0101 ➔ 100031（原注释笔误），unit_name 默认值 收费处 ➔ 收款处；零结构变更。
 2026-10-13 16:30:00 | 结构剪裁 | 补齐 org_name（默认 大连市皮肤病医院）；剥离冗余度量列 unit_price / calc_amount（连同其 DEFAULT、CHECK 与索引 INCLUDE），本表收敛为纯原始工作量事实（仅 workload_qty）；表级与字段级扩展属性同步改口径。
 2026-10-13 15:00:00 | 初始建表 | 新建收费处线下导入工作量明细事实表：自增 id 聚簇主键 + (账期,核算单元,项目) 覆盖检索索引 + unit_code/unit_name 默认 U0101/收费处 + 三列度量(原值/单价/结算金额) + batch_no 导入批次审计 + 8 类标准项目编码契约 + workload_qty/calc_amount 非负 CHECK；精度锁定 DECIMAL(18,8)；全脚本零 GO 单批分号执行。
 ================================================================================
@@ -103,14 +104,14 @@ CREATE NONCLUSTERED INDEX [ix_dwd_fin_charge_workload_detail_lookup]
 --    第 1 区块已 DROP TABLE 重建，表级扩展属性被物理层同步清除，
 --    故此处顺序执行，无需 IF EXISTS 守卫
 -- ================================================================
-EXEC sp_addextendedproperty N'MS_Description', N'收费处线下导入工作量明细事实表：承载收费服务工作、退费服务工作、挂号退号、入院收费、出院结算、押金调整、医保结算、日结等线下 Excel 细目工作量，为收费处一次分配的唯一事实源；粒度 = 核算年月 × 核算单元 × 标准项目编码；unit_code / unit_name 默认 U0101 / 收费处，保障科室映射零补码；org_code / org_name 带机构默认值（1001 / 大连市皮肤病医院）；workload_qty 为唯一度量列（线下导入原值），单价与结算金额不落本表、由下游单价配置与算子层承接；workload_qty 受 CHECK >= 0 非负硬约束，退费退号类语义为绝对量、方向由 item_code 决定；数值精度 DECIMAL(18,8)', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_charge_workload_detail';
+EXEC sp_addextendedproperty N'MS_Description', N'收费处线下导入工作量明细事实表：承载收费服务工作、退费服务工作、挂号退号、入院收费、出院结算、押金调整、医保结算、日结等线下 Excel 细目工作量，为收费处一次分配的唯一事实源；粒度 = 核算年月 × 核算单元 × 标准项目编码；unit_code / unit_name 默认 100031 / 收款处，保障科室映射零补码；org_code / org_name 带机构默认值（1001 / 大连市皮肤病医院）；workload_qty 为唯一度量列（线下导入原值），单价与结算金额不落本表、由下游单价配置与算子层承接；workload_qty 受 CHECK >= 0 非负硬约束，退费退号类语义为绝对量、方向由 item_code 决定；数值精度 DECIMAL(18,8)', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_charge_workload_detail';
 EXEC sp_addextendedproperty N'MS_Description', N'自增代理主键（单列聚簇，物理唯一寻址；业务行由 账期 × 核算单元 × 项目编码 逻辑定位，故不设业务复合主键）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_charge_workload_detail', N'COLUMN', N'id';
 EXEC sp_addextendedproperty N'MS_Description', N'核算年份（如 2026）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_charge_workload_detail', N'COLUMN', N'calc_year';
 EXEC sp_addextendedproperty N'MS_Description', N'核算月份（如 10）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_charge_workload_detail', N'COLUMN', N'calc_month';
 EXEC sp_addextendedproperty N'MS_Description', N'机构编码（字符串语义，默认 1001，严禁整型化）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_charge_workload_detail', N'COLUMN', N'org_code';
 EXEC sp_addextendedproperty N'MS_Description', N'机构名称（默认 大连市皮肤病医院；业务可读冗余展示标签，严禁作为关联键）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_charge_workload_detail', N'COLUMN', N'org_name';
-EXEC sp_addextendedproperty N'MS_Description', N'核算单元/科室编码（NOT NULL，默认 U0101 收费处；字符串语义，对齐 HPS_DEPT_CODE，严禁整型化防前导零丢失）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_charge_workload_detail', N'COLUMN', N'unit_code';
-EXEC sp_addextendedproperty N'MS_Description', N'核算单元/科室名称（NOT NULL，默认 收费处，支撑科室级汇总展示）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_charge_workload_detail', N'COLUMN', N'unit_name';
+EXEC sp_addextendedproperty N'MS_Description', N'核算单元/科室编码（NOT NULL，默认 100031 收款处；字符串语义，对齐 HPS_DEPT_CODE，严禁整型化防前导零丢失）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_charge_workload_detail', N'COLUMN', N'unit_code';
+EXEC sp_addextendedproperty N'MS_Description', N'核算单元/科室名称（NOT NULL，默认 收款处，支撑科室级汇总展示）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_charge_workload_detail', N'COLUMN', N'unit_name';
 EXEC sp_addextendedproperty N'MS_Description', N'标准项目编码（NOT NULL，字符串语义，严禁整型化）；标准取值：PROJ_CHARGE_FEES_PAY 收费服务工作 / PROJ_CHARGE_FEES_REFUND 退费服务工作 / PROJ_CHARGE_REG_CANCEL 挂号退号 / PROJ_CHARGE_INPATIENT_ADM 入院收费 / PROJ_CHARGE_INPATIENT_DIS 出院结算 / PROJ_CHARGE_DEPOSIT_ADJ 押金调整 / PROJ_CHARGE_INSURANCE_SETTLE 医保结算 / PROJ_CHARGE_DAILY_SETTLE 日结；该集合属业务细目台账，新增细目不施加枚举 CHECK 硬锁；加减方向由本列语义决定，严禁依赖 workload_qty 正负号', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_charge_workload_detail', N'COLUMN', N'item_code';
 EXEC sp_addextendedproperty N'MS_Description', N'导入原始细目名称（如 收费服务工作 / 退费服务工作；汉字仅作展示与人工核对，严禁作为关联键或 JOIN 条件）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_charge_workload_detail', N'COLUMN', N'item_name';
 EXEC sp_addextendedproperty N'MS_Description', N'工作量数值（DECIMAL(18,8) 高精度，默认 0.00000000；本表唯一度量列，线下导入原始值；受 CHECK >= 0 非负硬约束，退费退号类录入正数绝对量，方向由 item_code 决定；单价与结算金额不落本表，由下游单价配置与算子层承接）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_charge_workload_detail', N'COLUMN', N'workload_qty';
