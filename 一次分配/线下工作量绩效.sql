@@ -1,11 +1,11 @@
 /* ===============================================================================
-  Relative Path : 一次分配/收款处绩效.sql
-  脚本名称: 收款处绩效.sql
-  业务定义: 收款处（收费处）一次分配绩效金额 = Σ(线下导入细目工作量 × 单项RVU点数)，
-            按 核算单元 × 细目 粒度落库。
+  Relative Path : 一次分配/线下工作量绩效.sql
+  脚本名称: 线下工作量绩效.sql
+  业务定义: 线下工作量一次分配绩效金额 = Σ(线下导入细目工作量 × 单项RVU点数)，
+            按 核算单元 × 细目 粒度落库（泛化承接线下导入工作量核算单元，不绑定具体科室）。
   数据流向: dbo.[dwd_fin_charge_workload_detail]  (事实层: 线下导入工作量, 唯一度量 workload_qty)
             ──▶ dbo.[DIM_PRF_ITEM_RVU_VERSION]      (RVU 点数维表, 单版本 1:1 直连)
-            ──▶ dbo.[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (落库 Target: ITEM_CHARGE_PERFORMANCE / AMOUNT)
+            ──▶ dbo.[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (落库 Target: ITEM_OFFLINE_WORKLOAD_PERF / AMOUNT)
   粒度定义: 核算单元编码 × 核算单元名称 × 细目编码(PROJ_CODE)
 
   ── 依赖契约 ──
@@ -44,6 +44,7 @@
   {struct_codes}: 核算单元过滤集 (如 ('100031'))
 
   修改日志
+  2026-10-14 10:00:00 | 泛化重构 | 收款处绩效.sql 更名泛化为线下工作量绩效.sql：ITEM_CODE 改 ITEM_OFFLINE_WORKLOAD_PERF、ITEM_NAME/SCRIPT_NAME/出口列/审计抬头/JSON 主体节点统一改「线下工作量绩效」；RVU 单版本直连、JSON 快照、占位符契约零改动。
   2026-10-13 21:05:00 | 编译纠错 | 修正 JSON 快照关联列作用域：final 出口列全为中文别名、无英文列，快照子查询 WHERE 由 f.[PROJ_CODE] 纠正为 f.[项目编码]（原写法在 final 作用域内编译报「列名 'PROJ_CODE' 无效」）；joined 补注事实层 [item_code] ➔ src.PROJ_CODE 别名血缘。
   2026-10-13 20:20:00 | 结构对齐 | CALC_DETAIL_JSON 恢复「主体汇总 + RVU配置快照」双层嵌套：dim_rvu 恢复全字段 1:1 直连（[ID] 别名 RVU_ID），JSON_QUERY 按 PROJ_CODE 回读追加 23 节点 [RVU配置快照]（时间戳 CONVERT 文本化），对齐标杆《医疗服务项目开单积分.sql》；落库列/算式/第二区块/占位符零改动。
   2026-10-13 18:55:00 | 架构纠偏 | 对齐标杆《医疗服务项目开单积分.sql》：RVU 维表移除 ROW_NUMBER 开窗与 VERSION_NO 'V04' 常量过滤，退化为单版本 1:1 直连；撤 rvu_snap 收敛层、proj_name 名称链与嵌套 [RVU配置快照] 节点，CALC_DETAIL_JSON 收敛为单层扁平；agg 层一次算定 Σ工作量 × 点值；落库列、第二区块契约与占位符零改动。
@@ -57,7 +58,7 @@
 DELETE FROM [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]
 WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
   AND [CALC_MONTH] = CAST('{month}' AS INT)
-  AND [ITEM_CODE]  = N'ITEM_CHARGE_PERFORMANCE'
+  AND [ITEM_CODE]  = N'ITEM_OFFLINE_WORKLOAD_PERF'
   AND [UNIT_CODE] IN {struct_codes}
 ;
 
@@ -90,7 +91,7 @@ dim_rvu AS (
         v.[REMARK]                                     AS REMARK,
         v.[SCORE_REASON]                               AS SCORE_REASON
     FROM dbo.[DIM_PRF_ITEM_RVU_VERSION] AS v WITH (NOLOCK)
-    -- 单版本维表 1:1 直连，仅剔除空项目码；收款处不做绩效大类剪枝
+    -- 单版本维表 1:1 直连，仅剔除空项目码；本算子不做绩效大类剪枝
     WHERE v.[PROJ_CODE] IS NOT NULL
 ),
 
@@ -144,7 +145,7 @@ agg AS (
         j.[ITEM_CAT_NAME]                              AS ITEM_CAT_NAME,
         j.[RVU_VAL]                                    AS RVU_VAL,
         CAST(SUM(j.[WORKLOAD_QTY]) AS DECIMAL(18,8))               AS TOTAL_QTY,
-        CAST(SUM(j.[WORKLOAD_QTY]) * j.[RVU_VAL] AS DECIMAL(18,8)) AS CHARGE_AMOUNT
+        CAST(SUM(j.[WORKLOAD_QTY]) * j.[RVU_VAL] AS DECIMAL(18,8)) AS OFFLINE_WORKLOAD_PERF
     FROM joined AS j
     GROUP BY
         j.[ORG_CODE],
@@ -173,12 +174,12 @@ final AS (
         a.[ITEM_CAT_NAME]                              AS [绩效核算大类名称],
         a.[TOTAL_QTY]                                  AS [汇总工作量],
         a.[RVU_VAL]                                    AS [单项绩效点数],
-        a.[CHARGE_AMOUNT]                              AS [收款处绩效],
+        a.[OFFLINE_WORKLOAD_PERF]                      AS [线下工作量绩效],
         CONCAT(
-             N'收款处绩效 | 收费绩效 = 汇总工作量 × RVU点值 | ',
-             CAST(a.[TOTAL_QTY]     AS VARCHAR(32)), ' × ',
-             CAST(a.[RVU_VAL]       AS VARCHAR(32)), ' = ',
-             CAST(a.[CHARGE_AMOUNT] AS VARCHAR(32))
+             N'线下工作量绩效 | 绩效金额 = 汇总工作量 × RVU点值 | ',
+             CAST(a.[TOTAL_QTY]              AS VARCHAR(32)), ' × ',
+             CAST(a.[RVU_VAL]                AS VARCHAR(32)), ' = ',
+             CAST(a.[OFFLINE_WORKLOAD_PERF]  AS VARCHAR(32))
         )                                              AS [计算过程]
     FROM agg AS a
 )
@@ -193,9 +194,9 @@ INSERT INTO [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
 SELECT
     CAST('{year}'  AS INT)                          AS [CALC_YEAR],
     CAST('{month}' AS INT)                          AS [CALC_MONTH],
-    N'ITEM_CHARGE_PERFORMANCE'                      AS [ITEM_CODE],
-    N'收款处绩效'                                    AS [ITEM_NAME],
-    N'收款处绩效.sql'                                AS [SCRIPT_NAME],
+    N'ITEM_OFFLINE_WORKLOAD_PERF'                   AS [ITEM_CODE],
+    N'线下工作量绩效'                                AS [ITEM_NAME],
+    N'线下工作量绩效.sql'                            AS [SCRIPT_NAME],
     f.[核算单元编码]                                 AS [UNIT_CODE],
     f.[核算单元名称]                                 AS [UNIT_NAME],
     f.[项目编码]                                     AS [PROJ_CODE],
@@ -209,7 +210,7 @@ SELECT
     N'NONE'                                         AS [DAY_TYPE_CODE],
     N'NONE'                                         AS [DAY_TYPE_NAME],
     N'AMOUNT'                                       AS [FINAL_VALUE_TYPE],
-    CAST(f.[收款处绩效] AS DECIMAL(18,8))            AS [FINAL_VALUE],
+    CAST(f.[线下工作量绩效] AS DECIMAL(18,8))       AS [FINAL_VALUE],
     CAST(f.[汇总工作量] AS DECIMAL(18,8))            AS [TOTAL_QTY],
     f.[计算过程]                                     AS [CALC_PROCESS_TEXT],
 
@@ -228,7 +229,7 @@ SELECT
             f.[绩效核算大类名称]                                  AS [绩效核算大类名称],
             CAST(f.[汇总工作量]   AS DECIMAL(18,8))               AS [汇总工作量],
             CAST(f.[单项绩效点数] AS DECIMAL(18,8))               AS [单项RVU点数],
-            CAST(f.[收款处绩效]   AS DECIMAL(18,8))               AS [收款处绩效],
+            CAST(f.[线下工作量绩效] AS DECIMAL(18,8))             AS [线下工作量绩效],
             f.[计算过程]                                          AS [计算过程描述],
             -- RVU 配置全字段快照（JSON_QUERY 单层嵌套；按 PROJ_CODE 1:1 直连 dim_rvu，零开窗）
             JSON_QUERY((
@@ -301,7 +302,7 @@ WITH CTE_DWD_READ_ALIAS AS (
     -- 占位符条件独占成行
     WHERE [CALC_YEAR]  = CAST('{year}'  AS INT)
       AND [CALC_MONTH] = CAST('{month}' AS INT)
-      AND [ITEM_CODE]  = N'ITEM_CHARGE_PERFORMANCE'
+      AND [ITEM_CODE]  = N'ITEM_OFFLINE_WORKLOAD_PERF'
       AND [UNIT_CODE] IN {struct_codes}
 )
 
