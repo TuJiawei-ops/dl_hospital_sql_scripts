@@ -3,16 +3,16 @@
 
  Source Server         : 127.0.0.1
  Source Server Type    : SQL Server
- Source Server Version : 16001200 (16.00.1200)
+ Source Server Version : 16001210 (16.00.1210)
  Source Host           : 127.0.0.1:1433
  Source Catalog        : hospital_performance_dalian_derma
  Source Schema         : dbo
 
  Target Server Type    : SQL Server
- Target Server Version : 16001200 (16.00.1200)
+ Target Server Version : 16001210 (16.00.1210)
  File Encoding         : 65001
 
- Date: 12/09/2026 16:54:51
+ Date: 22/10/2026 15:23:30
 */
 
 
@@ -32,7 +32,7 @@ CREATE TABLE [dbo].[DIM_PRF_ITEM_RVU_VERSION] (
   [PROJ_CODE] varchar(50) COLLATE Chinese_PRC_CI_AS  NOT NULL,
   [PROJ_NAME] nvarchar(200) COLLATE Chinese_PRC_CI_AS  NULL,
   [MEAS_UNIT] nvarchar(50) COLLATE Chinese_PRC_CI_AS  NOT NULL,
-  [RVU_VAL] numeric(12,4) DEFAULT 0.0000 NOT NULL,
+  [RVU_VAL] numeric(12,8) DEFAULT 0.0000 NOT NULL,
   [ITEM_CAT_CODE] varchar(50) COLLATE Chinese_PRC_CI_AS  NOT NULL,
   [ITEM_CAT_NAME] nvarchar(100) COLLATE Chinese_PRC_CI_AS  NOT NULL,
   [UNIT_PRICE] numeric(18,4) DEFAULT 0.0000 NOT NULL,
@@ -42,7 +42,6 @@ CREATE TABLE [dbo].[DIM_PRF_ITEM_RVU_VERSION] (
   [CREATE_TIME] datetime DEFAULT getdate() NOT NULL,
   [UPDATE_USER] varchar(50) COLLATE Chinese_PRC_CI_AS DEFAULT 'SYSTEM' NOT NULL,
   [UPDATE_TIME] datetime DEFAULT getdate() NOT NULL,
-  [ID] bigint  NULL,
   [DECISION_COFF] decimal(18,4) DEFAULT 1.0000 NOT NULL,
   [EXEC_COFF] decimal(5,4) DEFAULT 1.0000 NOT NULL,
   [REMARK] varchar(255) COLLATE Chinese_PRC_CI_AS  NULL,
@@ -52,7 +51,8 @@ CREATE TABLE [dbo].[DIM_PRF_ITEM_RVU_VERSION] (
   [TECH_ORDER_RVU_VAL] decimal(18,4) DEFAULT 0.0000 NULL,
   [TECH_EXEC_RVU_VAL] decimal(18,4) DEFAULT 0.0000 NULL,
   [NURSE_ORDER_RVU_VAL] decimal(18,4) DEFAULT 0.0000 NULL,
-  [NURSE_EXEC_RVU_VAL] decimal(18,4) DEFAULT 0.0000 NULL
+  [NURSE_EXEC_RVU_VAL] decimal(18,4) DEFAULT 0.0000 NULL,
+  [ID] bigint  IDENTITY(1,1) NOT NULL
 )
 GO
 
@@ -186,13 +186,6 @@ EXEC sp_addextendedproperty
 GO
 
 EXEC sp_addextendedproperty
-'MS_Description', N'【系统冗余错误功能】架构妥协：为统一开发接口临时加入的冗余ID字段',
-'SCHEMA', N'dbo',
-'TABLE', N'DIM_PRF_ITEM_RVU_VERSION',
-'COLUMN', N'ID'
-GO
-
-EXEC sp_addextendedproperty
 'MS_Description', N'诊疗决策系数（用于体现临床医生开单决策的风险与技术含量，未配置默认 1.0000 降维兜底）',
 'SCHEMA', N'dbo',
 'TABLE', N'DIM_PRF_ITEM_RVU_VERSION',
@@ -270,9 +263,16 @@ GO
 
 
 -- ----------------------------
+-- Auto increment value for DIM_PRF_ITEM_RVU_VERSION
+-- ----------------------------
+DBCC CHECKIDENT ('[dbo].[DIM_PRF_ITEM_RVU_VERSION]', RESEED, 1180)
+GO
+
+
+-- ----------------------------
 -- Indexes structure for table DIM_PRF_ITEM_RVU_VERSION
 -- ----------------------------
-CREATE NONCLUSTERED INDEX [IX_DIM_PRF_ITEM_RVU_VERSION_LOOKUP]
+CREATE NONCLUSTERED INDEX [IX_DIM_PRF_ITEM_RVU_VERSION_LOOKUP_copy2_copy1_copy1_copy1_copy3_copy2_copy1]
 ON [dbo].[DIM_PRF_ITEM_RVU_VERSION] (
   [ORG_CODE] ASC,
   [SRC_SYS_CODE] ASC,
@@ -285,7 +285,7 @@ GO
 -- ----------------------------
 -- Primary Key structure for table DIM_PRF_ITEM_RVU_VERSION
 -- ----------------------------
-ALTER TABLE [dbo].[DIM_PRF_ITEM_RVU_VERSION] ADD CONSTRAINT [PK_DIM_PRF_ITEM_RVU_VERSION] PRIMARY KEY CLUSTERED ([ORG_CODE], [VERSION_NO], [PROJ_CODE], [MEAS_UNIT])
+ALTER TABLE [dbo].[DIM_PRF_ITEM_RVU_VERSION] ADD CONSTRAINT [PK__DIM_PRF___A8D2CEE5E1D8B3FA] PRIMARY KEY CLUSTERED ([ORG_CODE], [VERSION_NO], [PROJ_CODE], [MEAS_UNIT])
 WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON)  
 ON [PRIMARY]
 GO
