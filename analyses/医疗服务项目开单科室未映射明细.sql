@@ -1,6 +1,6 @@
 /* ===============================================================================
-  Relative Path : analyses/排查_医疗服务项目开单未映射核算单元明细.sql
-  脚本名称: 排查_医疗服务项目开单未映射核算单元明细.sql
+  Relative Path : analyses/医疗服务项目开单科室未映射明细.sql
+  脚本名称: 医疗服务项目开单科室未映射明细.sql
   业务说明: 医疗服务项目开单积分归属为 UNIT_CODE = 'UNKNOWN' / N'未映射核算单元' 的根因定位。
             链路: 事实层 [开单科室代码] ──(id)──▶ dbo.[sjjk_bmb_2025_06_01].[编码] (HIS_DEPT_CODE)
                   ──▶ dbo.[sjjk_DEPT_UNIT_MAPPING_2025_11_27] (PERFORM_PERSON_TYPE_CODE='1001')
@@ -51,6 +51,7 @@
   2026-09-19 01:00:00 | 脚本新建 | 建立医疗服务项目开单核算单元未映射专项排查脚本：三层 LEFT JOIN 递进 +
                                  已配置清单反查，严格区分「字典缺失 / 映射未配置 / 时间区间不匹配」三类断链根因；
                                  时间基准锁定事实表 [执行时间] 与计算脚本同源；输出科室粒度汇总表与行级明细抽样表。
+  2026-10-23 12:14:26 | 报表人性化重构 | 文件重命名为《医疗服务项目开单科室未映射明细.sql》，并在结果集中新增自然语言排查指引，直接指出缺失的表名、字段与具体编码值，降低业务排错门槛。
 =============================================================================== */
 
 
@@ -276,6 +277,21 @@ SELECT
    ,ISNULL(d.[DEPT_NAME], N'')                                      AS [原始开单科室名称]
    ,ISNULL(d.[HIS_DEPT_CODE], N'')                                  AS [字典桥接HIS编码]
    ,d.[BREAK_TYPE]                                                  AS [断链类型诊断]
+   ,CASE
+        WHEN d.[BREAK_TYPE] = N'字典缺失'
+            THEN N'部门字典表(sjjk_bmb_2025_06_01)缺失开单科室代码：'
+                 + ISNULL(CAST(d.[DEPT_ID] AS VARCHAR(20)), N'空')
+                 + N' → 请在该表按 id 补录此科室行并填写 [编码]'
+        WHEN d.[BREAK_TYPE] = N'映射未配置'
+            THEN N'科室与核算单元映射表(sjjk_DEPT_UNIT_MAPPING_2025_11_27)缺少开单科室HIS编码：'
+                 + ISNULL(d.[HIS_DEPT_CODE], N'空')
+                 + N' → 请补配 PERFORM_PERSON_TYPE_CODE = ''1001'' 的映射行'
+        WHEN d.[BREAK_TYPE] = N'时间区间不匹配'
+            THEN N'科室与核算单元映射表(sjjk_DEPT_UNIT_MAPPING_2025_11_27)的HIS编码['
+                 + ISNULL(d.[HIS_DEPT_CODE], N'')
+                 + N']存在配置，但业务时间不在有效范围内 → 请对照右侧已配置区间扩展 START_DATE / END_DATE 或补配当期行'
+        ELSE N'未识别的断链类型，请核查 cte_diag 判定逻辑'
+    END                                                             AS [具体排查与补配指引]
    ,COUNT(1)                                                        AS [影响事实明细行数]
    ,CAST(SUM(d.[AMOUNT]) AS DECIMAL(18,8))                          AS [影响总金额]
    ,CONVERT(VARCHAR(19), MIN(d.[EXEC_TIME]), 120)                   AS [涉及最小时间]
