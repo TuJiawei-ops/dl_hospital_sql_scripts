@@ -3,7 +3,7 @@
   脚本名称: 医疗服务项目开单科室未映射明细.sql
   业务说明: 医疗服务项目开单积分归属为 UNIT_CODE = 'UNKNOWN' / N'未映射核算单元' 的根因定位。
             链路: 事实层 [开单科室代码] ──(id)──▶ dbo.[sjjk_bmb_2025_06_01].[编码] (HIS_DEPT_CODE)
-                  ──▶ dbo.[sjjk_DEPT_UNIT_MAPPING_2025_11_27] (PERFORM_PERSON_TYPE_CODE='1001')
+                  ──▶ dbo.[sjjk_DEPT_UNIT_MAPPING_2025_11_27] (PERFORM_PERSON_TYPE_CODE IN ('1001','1003','1004','1005','1021'))
                   ──(HPS_DEPT_CODE)──▶ 绩效核算单元
   输出形态: 两个结果集（同一 WITH 链，逐段执行即可）
             结果集 1 = 未映射原因汇总表（原始开单科室粒度，含断链类型诊断与配置缺口参考区间）
@@ -11,7 +11,7 @@
 
   ── 三类断链根因分层（严格互斥，逐层判定） ──
   ① 字典缺失        事实层 [开单科室代码] 在 sjjk_bmb_2025_06_01 中无对应 [id]（HIS_DEPT_CODE 为 NULL）
-  ② 映射未配置      字典命中 HIS_DEPT_CODE，但拉链表内该编码无任何 PERFORM_PERSON_TYPE_CODE='1001' 的配置行
+  ② 映射未配置      字典命中 HIS_DEPT_CODE，但拉链表内该编码无任何职系白名单（1001/1003/1004/1005/1021）内的配置行
   ③ 时间区间不匹配  拉链表内该 HIS_DEPT_CODE 已有配置，但事实记录时间不落在任一 [START_DATE, END_DATE] 日粒度区间内
 
   ── 关键纠偏（防熵增，务必知悉） ──
@@ -26,6 +26,11 @@
   4. 【全时间范围】取消 '{start_time}' / '{end_time}' 时间窗过滤，事实表全量扫描（仅保留 RVU 维度
      大类剪枝口径，与计算脚本一致），定位全历史维度的映射缺口。
   5. 【源列零改造】全部编码类字段裸引用，不做 CAST 整形/补零/去空格，避免隐性截断与关联失配。
+  6. 【职系白名单对齐】拉链表人员类型过滤由单一 '1001' 扩为 IN ('1001','1003','1004','1005','1021')，
+     覆盖临床 / 药剂 / 医技 / 麻风住院部 / 行后系列，杜绝非临床开单科室被误报为「映射未配置」。
+     注: 计算脚本 一次分配/医疗服务项目开单积分.sql 当前白名单为 IN ('1001','1021','1005')；
+     若 1003 / 1004 未在计算侧同步放开，该类科室在本脚本判定为「已映射」而不上报（排查侧静默
+     放过），两侧白名单须同步维护方可保证排查结论与 UNKNOWN 归属完全等价。
 
   只读声明: 纯 SELECT 排查脚本，无任何 INSERT / UPDATE / DELETE / DDL 副作用（零持久化）。
             断链诊断结果经 SELECT ... INTO 物化至会话级临时表 #TMP_DIAG，随会话结束自动回收，
@@ -54,6 +59,7 @@
   2026-10-23 12:14:26 | 报表人性化重构 | 文件重命名为《医疗服务项目开单科室未映射明细.sql》，并在结果集中新增自然语言排查指引，直接指出缺失的表名、字段与具体编码值，降低业务排错门槛。
   2026-10-23 12:19:44 | 列表规范化 | 结果集汇总表字段调整：[原始开单科室代码] 改名为 [HIS科室ID] 置于首列，[字典桥接HIS编码] 改名为 [HIS科室编码] 并前置至第二列，提升核对直观度。
   2026-10-23 12:28:51 | 技术底层修复 | 拉链时间匹配改用 CONVERT(VARCHAR(8), ..., 112) 转 YYYYMMDD 边界比对，解决 DATETIME 精度差异与 9999 年极值导致的误判。
+  2026-10-23 13:10:00 | 业务口径对齐 | 拉链表人员类型过滤由 PERFORM_PERSON_TYPE_CODE='1001' 扩为 IN ('1001','1003','1004','1005','1021')，覆盖药剂/医技/麻风住院部/行后系列，根除非临床科室误报「映射未配置」。
 =============================================================================== */
 
 
@@ -90,7 +96,7 @@ WITH cte_bmb_bridge AS (
 )
 ,cte_dept_unit_mapping AS (
     -- ── Import CTE: HIS 科室 → 绩效核算单元 拉链维表（原始透传，严禁开窗去重折叠） ──
-    -- 限定 PERFORM_PERSON_TYPE_CODE='1001'，与计算脚本同源；一对多映射并存属业务预期颗粒度。
+    -- 职系白名单: 1001 临床 / 1003 药剂 / 1004 医技 / 1005 麻风住院部 / 1021 行后；一对多映射并存属业务预期颗粒度。
     SELECT
         m.[ID]                                          AS MAPPING_ID
        ,m.[HIS_DEPT_CODE]
@@ -100,16 +106,16 @@ WITH cte_bmb_bridge AS (
        ,m.[START_DATE]
        ,m.[END_DATE]
     FROM dbo.[sjjk_DEPT_UNIT_MAPPING_2025_11_27] AS m WITH (NOLOCK)
-    WHERE m.[PERFORM_PERSON_TYPE_CODE] = '1001'
+    WHERE m.[PERFORM_PERSON_TYPE_CODE] IN ('1001', '1003', '1004', '1005', '1021')
 )
 ,cte_configured AS (
     -- ── Import CTE: 已配置 HIS 科室编码清单（用于消解「映射未配置」与「时间区间不匹配」的归因歧义） ──
-    -- 凡在拉链表内存在任意一条 1001 类型配置行（无论账期是否覆盖），即视为「已配置」，
+    -- 凡在拉链表内存在任意一条职系白名单配置行（无论账期是否覆盖），即视为「已配置」，
     -- 从而将 m.[HPS_DEPT_CODE] IS NULL 精确拆解为「无任何配置」与「有配置但时间越界」两类。
     SELECT DISTINCT
         c.[HIS_DEPT_CODE]                               AS HIS_DEPT_CODE
     FROM dbo.[sjjk_DEPT_UNIT_MAPPING_2025_11_27] AS c WITH (NOLOCK)
-    WHERE c.[PERFORM_PERSON_TYPE_CODE] = '1001'
+    WHERE c.[PERFORM_PERSON_TYPE_CODE] IN ('1001', '1003', '1004', '1005', '1021')
       AND c.[HIS_DEPT_CODE] IS NOT NULL
 )
 ,cte_config_span AS (
@@ -122,7 +128,7 @@ WITH cte_bmb_bridge AS (
        ,MAX(s.[END_DATE])                               AS SPAN_END_DATE
        ,COUNT(1)                                        AS CONFIG_ROW_CNT
     FROM dbo.[sjjk_DEPT_UNIT_MAPPING_2025_11_27] AS s WITH (NOLOCK)
-    WHERE s.[PERFORM_PERSON_TYPE_CODE] = '1001'
+    WHERE s.[PERFORM_PERSON_TYPE_CODE] IN ('1001', '1003', '1004', '1005', '1021')
       AND s.[HIS_DEPT_CODE] IS NOT NULL
     GROUP BY
         s.[HIS_DEPT_CODE]
@@ -288,7 +294,7 @@ SELECT
         WHEN d.[BREAK_TYPE] = N'映射未配置'
             THEN N'科室与核算单元映射表(sjjk_DEPT_UNIT_MAPPING_2025_11_27)缺少开单科室HIS编码：'
                  + ISNULL(d.[HIS_DEPT_CODE], N'空')
-                 + N' → 请补配 PERFORM_PERSON_TYPE_CODE = ''1001'' 的映射行'
+                 + N' → 请补配 PERFORM_PERSON_TYPE_CODE IN (''1001'',''1003'',''1004'',''1005'',''1021'') 的映射行'
         WHEN d.[BREAK_TYPE] = N'时间区间不匹配'
             THEN N'科室与核算单元映射表(sjjk_DEPT_UNIT_MAPPING_2025_11_27)的HIS编码['
                  + ISNULL(d.[HIS_DEPT_CODE], N'')
