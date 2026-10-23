@@ -18,9 +18,9 @@
   1. 【时间基准锁定执行时间】计算脚本 一次分配/医疗服务项目开单积分.sql 第 103 行以
      a.[执行时间] AS ORDER_TIME 作为拉链区间匹配基准，本排查脚本严格沿用 [执行时间]，
      确保排查结论可直接反证计算侧的 UNKNOWN 成因；[执行时间] 为空时以 [缴费时间] 兜底参与区间判定。
-  2. 【归因歧义消解】若仅以 LEFT JOIN 后 m.[HPS_DEPT_CODE] IS NULL 判定，无法区分「无配置」
-     与「时间越界」两类根因。故引入 cte_configured（拉链表 DISTINCT 已配置编码清单）反查，
-     按「字典缺失 → 映射未配置 → 时间区间不匹配」顺序递进判定，三类结果互斥且完备。
+  2. 【归因歧义消解】反半连接只能回答「是否命中」，无法区分「无配置」与「时间越界」两类根因。
+     故引入 cte_configured（拉链表 DISTINCT 已配置编码清单）反查，按「字典缺失 → 映射未配置 →
+     时间区间不匹配」顺序递进判定，三类结果互斥且完备。
   3. 【零剪枝】拉链表不做 ROW_NUMBER()/MAX() 折叠、不加人员类型以外的过滤，与计算脚本同源裸查口径，
      否则排查结果无法反证计算侧漏计。
   4. 【全时间范围】取消 '{start_time}' / '{end_time}' 时间窗过滤，事实表全量扫描（仅保留 RVU 维度
@@ -31,6 +31,9 @@
      注: 计算脚本 一次分配/医疗服务项目开单积分.sql 当前白名单为 IN ('1001','1021','1005')；
      若 1003 / 1004 未在计算侧同步放开，该类科室在本脚本判定为「已映射」而不上报（排查侧静默
      放过），两侧白名单须同步维护方可保证排查结论与 UNKNOWN 归属完全等价。
+  7. 【反半连接等价性】NOT EXISTS 内附加 mx.[HPS_DEPT_CODE] IS NOT NULL，与「存在非空核算单元即已映射」同义；
+     仅当同一科室在同一有效区间内同时存在核算单元为空与非空两行配置时，旧 LEFT JOIN 写法会误报未映射，
+     本版不再上报（唯一行为差异，属纠偏非口径变更）。
 
   只读声明: 纯 SELECT 排查脚本，无任何 INSERT / UPDATE / DELETE / DDL 副作用（零持久化）。
             断链诊断结果经 SELECT ... INTO 物化至会话级临时表 #TMP_DIAG，随会话结束自动回收，
@@ -60,6 +63,8 @@
   2026-10-23 12:19:44 | 列表规范化 | 结果集汇总表字段调整：[原始开单科室代码] 改名为 [HIS科室ID] 置于首列，[字典桥接HIS编码] 改名为 [HIS科室编码] 并前置至第二列，提升核对直观度。
   2026-10-23 12:28:51 | 技术底层修复 | 拉链时间匹配改用 CONVERT(VARCHAR(8), ..., 112) 转 YYYYMMDD 边界比对，解决 DATETIME 精度差异与 9999 年极值导致的误判。
   2026-10-23 13:10:00 | 业务口径对齐 | 拉链表人员类型过滤由 PERFORM_PERSON_TYPE_CODE='1001' 扩为 IN ('1001','1003','1004','1005','1021')，覆盖药剂/医技/麻风住院部/行后系列，根除非临床科室误报「映射未配置」。
+  2026-10-23 13:40:00 | 性能与展示精简 | 移除结果集 1 的 [涉及最小时间] / [涉及最大时间] 两列及 MIN/MAX(EXEC_TIME) 聚合，减轻 #TMP_DIAG 聚合开销。
+  2026-10-23 14:05:00 | 查询重写 | cte_diag 映射命中由 LEFT JOIN 拉链维表 + HPS IS NULL 过滤改为 NOT EXISTS 反半连接，消除多版本行放大并移除冗余 GROUP BY / MAX 收敛；三类判定与双结果集不变。
 =============================================================================== */
 
 
@@ -181,7 +186,7 @@ WITH cte_bmb_bridge AS (
 ,cte_diag AS (
     -- ── Logical CTE: 拉链映射匹配 + 三层断链根因判定（结果集互斥且完备） ──
     -- 判定顺序: 字典缺失 → 映射未配置 → 时间区间不匹配；时间按 YYYYMMDD 日粒度闭区间比对。
-    -- 仅输出未命中核算单元的行；为避免同编码多配置行导致的失败匹配放大，按事实主键维度收敛至 1 行。
+    -- 仅输出未命中核算单元的行；映射匹配改用反半连接，无多版本行放大，故无需 GROUP BY 收敛。
     SELECT
         k.[SRC_TYPE]
        ,k.[HIS_PK]
@@ -198,42 +203,29 @@ WITH cte_bmb_bridge AS (
        ,k.[AMOUNT]
        ,k.[HIS_DEPT_CODE]
        ,k.[HIS_DEPT_NAME]
-       ,MAX(cfg.[HIS_DEPT_CODE])                        AS CFG_HIS_DEPT_CODE
-       ,MAX(sp.[SPAN_START_DATE])                       AS SPAN_START_DATE
-       ,MAX(sp.[SPAN_END_DATE])                         AS SPAN_END_DATE
-       ,MAX(sp.[CONFIG_ROW_CNT])                        AS CONFIG_ROW_CNT
+       ,cfg.[HIS_DEPT_CODE]                            AS CFG_HIS_DEPT_CODE
+       ,sp.[SPAN_START_DATE]                           AS SPAN_START_DATE
+       ,sp.[SPAN_END_DATE]                             AS SPAN_END_DATE
+       ,sp.[CONFIG_ROW_CNT]                            AS CONFIG_ROW_CNT
        ,CASE
             WHEN k.[HIS_DEPT_CODE] IS NULL   THEN N'字典缺失'
-            WHEN MAX(cfg.[HIS_DEPT_CODE]) IS NULL THEN N'映射未配置'
+            WHEN cfg.[HIS_DEPT_CODE] IS NULL THEN N'映射未配置'
             ELSE N'时间区间不匹配'
         END                                             AS BREAK_TYPE
     FROM cte_keyed AS k
-    LEFT JOIN cte_dept_unit_mapping AS m
-        ON k.[HIS_DEPT_CODE] = m.[HIS_DEPT_CODE]
-       -- YYYYMMDD 日粒度比对
-       AND CONVERT(VARCHAR(8), ISNULL(k.[EXEC_TIME], k.[PAY_TIME]), 112) >= CONVERT(VARCHAR(8), m.[START_DATE], 112)
-       AND CONVERT(VARCHAR(8), ISNULL(k.[EXEC_TIME], k.[PAY_TIME]), 112) <= CONVERT(VARCHAR(8), ISNULL(m.[END_DATE], '9999-12-31'), 112)
     LEFT JOIN cte_configured AS cfg
         ON k.[HIS_DEPT_CODE] = cfg.[HIS_DEPT_CODE]
     LEFT JOIN cte_config_span AS sp
         ON cfg.[HIS_DEPT_CODE] = sp.[HIS_DEPT_CODE]
-    WHERE m.[HPS_DEPT_CODE] IS NULL
-    GROUP BY
-        k.[SRC_TYPE]
-       ,k.[HIS_PK]
-       ,k.[PATIENT_ID]
-       ,k.[REG_ID]
-       ,k.[DEPT_ID]
-       ,k.[DEPT_NAME]
-       ,k.[ORDER_TIME]
-       ,k.[EXEC_TIME]
-       ,k.[PAY_TIME]
-       ,k.[PROJ_CODE]
-       ,k.[PROJ_NAME]
-       ,k.[QTY]
-       ,k.[AMOUNT]
-       ,k.[HIS_DEPT_CODE]
-       ,k.[HIS_DEPT_NAME]
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM cte_dept_unit_mapping AS mx
+        WHERE mx.[HIS_DEPT_CODE] = k.[HIS_DEPT_CODE]
+          AND mx.[HPS_DEPT_CODE] IS NOT NULL
+          -- YYYYMMDD 日粒度比对
+          AND CONVERT(VARCHAR(8), ISNULL(k.[EXEC_TIME], k.[PAY_TIME]), 112) >= CONVERT(VARCHAR(8), mx.[START_DATE], 112)
+          AND CONVERT(VARCHAR(8), ISNULL(k.[EXEC_TIME], k.[PAY_TIME]), 112) <= CONVERT(VARCHAR(8), ISNULL(mx.[END_DATE], '9999-12-31'), 112)
+    )
 )
 
 -- =================================================================
@@ -292,9 +284,9 @@ SELECT
                  + ISNULL(CAST(d.[DEPT_ID] AS VARCHAR(20)), N'空')
                  + N' → 请在该表按 id 补录此科室行并填写 [编码]'
         WHEN d.[BREAK_TYPE] = N'映射未配置'
-            THEN N'科室与核算单元映射表(sjjk_DEPT_UNIT_MAPPING_2025_11_27)缺少开单科室HIS编码：'
+            THEN N'科室与核算单元映射表(sjjk_DEPT_UNIT_MAPPING_2025_11_27)缺少HIS科室编码：'
                  + ISNULL(d.[HIS_DEPT_CODE], N'空')
-                 + N' → 请补配 PERFORM_PERSON_TYPE_CODE IN (''1001'',''1003'',''1004'',''1005'',''1021'') 的映射行'
+--                  + N' → 请补配 PERFORM_PERSON_TYPE_CODE IN (''1001'',''1003'',''1004'',''1005'',''1021'') 的映射行'
         WHEN d.[BREAK_TYPE] = N'时间区间不匹配'
             THEN N'科室与核算单元映射表(sjjk_DEPT_UNIT_MAPPING_2025_11_27)的HIS编码['
                  + ISNULL(d.[HIS_DEPT_CODE], N'')
@@ -303,8 +295,6 @@ SELECT
     END                                                             AS [具体排查与补配指引]
    ,COUNT(1)                                                        AS [影响事实明细行数]
    ,CAST(SUM(d.[AMOUNT]) AS DECIMAL(18,8))                          AS [影响总金额]
-   ,CONVERT(VARCHAR(19), MIN(d.[EXEC_TIME]), 120)                   AS [涉及最小时间]
-   ,CONVERT(VARCHAR(19), MAX(d.[EXEC_TIME]), 120)                   AS [涉及最大时间]
    ,CASE
         WHEN d.[CONFIG_ROW_CNT] IS NULL THEN N'无任何配置'
         ELSE CONVERT(VARCHAR(19), d.[SPAN_START_DATE], 120)
