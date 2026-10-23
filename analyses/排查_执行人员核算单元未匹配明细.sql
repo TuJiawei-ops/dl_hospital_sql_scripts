@@ -82,7 +82,7 @@ WITH cte_rvu AS (
        ,sp.[unit_name]                              AS 核算单元名称
        ,fa.[item_cnt]                               AS 涉及项目工作量件数
        ,CASE
-            WHEN ryb.[src_staff_code] IS NULL THEN N'人员表未收录（sjjk_ryb 无此 id）'
+            WHEN ryb.[src_staff_code] IS NULL THEN N'人员表未更新（sjjk_ryb 无此 id）'
             WHEN mdm.[staff_code] IS NULL     THEN N'主数据未映射（MAP_MDM_STAFF 未配置）'
             WHEN sp.[staff_code] IS NULL      THEN N'岗位系数表未配置（当期无记录）'
             ELSE N'核算单元为空（记录存在但 unit_code 为 NULL）'
@@ -106,7 +106,7 @@ SELECT
    ,诊断.[缴费月份]
    ,诊断.[原始系统工号]
    ,诊断.[主数据命中工号]
-   ,ISNULL(诊断.[主数据标准工号], N'MAP_MDM_STAFF未配置')      AS [主数据标准工号]
+   ,ISNULL(诊断.[主数据标准工号], N'员工工号对照表MAP_MDM_STAFF未配置')      AS [主数据标准工号]
    ,诊断.[主数据标准姓名]
    ,诊断.[核算单元编码]
    ,诊断.[核算单元名称]
