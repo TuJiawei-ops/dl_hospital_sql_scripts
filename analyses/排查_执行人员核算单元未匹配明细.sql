@@ -5,6 +5,7 @@
             链路：执行人员代码 → sjjk_ryb_2025_06_01[编号] → MAP_MDM_STAFF[STAFF_CODE] → ads_dept_post_coefficient_m。
   修改日志：
   2026-09-16 16:20:00 | 脚本新建 | 建立执行人员核算单元断链审计脚本：三层 LEFT JOIN 递进定位断点，输出主数据未映射 / 岗位系数表未配置 / 账期未覆盖 三类根因与工作量件数。
+  2026-10-23 11:22:02 | 过滤与排序调整 | cte_exec_fact 追加执行人员 NULL 与 123/2343/2523 黑名单剔除（BIGINT 数值字面量），科室条件补括号防 OR/AND 优先级串扰；ORDER BY 改为年份/月份 DESC 优先。
 =============================================================================== */
 
 
@@ -58,8 +59,10 @@ WITH cte_rvu AS (
     FROM dbo.[PF临时医疗服务项目26A] AS f WITH (NOLOCK)
     INNER JOIN cte_rvu AS v
         ON f.[项目代码] = v.[PROJ_CODE]
-    WHERE f.[执行科室代码] IS NULL
-       OR f.[执行科室代码] <> 36
+    WHERE (f.[执行科室代码] IS NULL OR f.[执行科室代码] <> 36)
+       -- 执行人员黑名单剔除
+       AND f.[执行人员代码] IS NOT NULL
+       AND f.[执行人员代码] NOT IN (123, 2343, 2523)
     GROUP BY
         f.[执行人员代码]
        ,YEAR(f.[缴费时间])
@@ -111,8 +114,8 @@ SELECT
    ,CAST(诊断.[涉及项目工作量件数] AS DECIMAL(18,8))            AS [涉及项目工作量件数]
 FROM cte_diag AS 诊断
 ORDER BY
-    诊断.[涉及项目工作量件数] DESC
+    诊断.[缴费年份] DESC
+   ,诊断.[缴费月份] DESC
+   ,诊断.[涉及项目工作量件数] DESC
    ,诊断.[执行人员代码] ASC
-   ,诊断.[缴费年份] ASC
-   ,诊断.[缴费月份] ASC
 ;
