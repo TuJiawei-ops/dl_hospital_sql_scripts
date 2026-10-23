@@ -12,12 +12,12 @@
   ── 三类断链根因分层（严格互斥，逐层判定） ──
   ① 字典缺失        事实层 [开单科室代码] 在 sjjk_bmb_2025_06_01 中无对应 [id]（HIS_DEPT_CODE 为 NULL）
   ② 映射未配置      字典命中 HIS_DEPT_CODE，但拉链表内该编码无任何 PERFORM_PERSON_TYPE_CODE='1001' 的配置行
-  ③ 时间区间不匹配  拉链表内该 HIS_DEPT_CODE 已有配置，但事实记录时间不落在任一 [START_DATE, END_DATE) 区间内
+  ③ 时间区间不匹配  拉链表内该 HIS_DEPT_CODE 已有配置，但事实记录时间不落在任一 [START_DATE, END_DATE] 日粒度区间内
 
   ── 关键纠偏（防熵增，务必知悉） ──
   1. 【时间基准锁定执行时间】计算脚本 一次分配/医疗服务项目开单积分.sql 第 103 行以
      a.[执行时间] AS ORDER_TIME 作为拉链区间匹配基准，本排查脚本严格沿用 [执行时间]，
-     确保排查结论可直接反证计算侧的 UNKNOWN 成因；[缴费时间] 仅作明细输出参考列，不参与区间判定。
+     确保排查结论可直接反证计算侧的 UNKNOWN 成因；[执行时间] 为空时以 [缴费时间] 兜底参与区间判定。
   2. 【归因歧义消解】若仅以 LEFT JOIN 后 m.[HPS_DEPT_CODE] IS NULL 判定，无法区分「无配置」
      与「时间越界」两类根因。故引入 cte_configured（拉链表 DISTINCT 已配置编码清单）反查，
      按「字典缺失 → 映射未配置 → 时间区间不匹配」顺序递进判定，三类结果互斥且完备。
@@ -52,6 +52,8 @@
                                  已配置清单反查，严格区分「字典缺失 / 映射未配置 / 时间区间不匹配」三类断链根因；
                                  时间基准锁定事实表 [执行时间] 与计算脚本同源；输出科室粒度汇总表与行级明细抽样表。
   2026-10-23 12:14:26 | 报表人性化重构 | 文件重命名为《医疗服务项目开单科室未映射明细.sql》，并在结果集中新增自然语言排查指引，直接指出缺失的表名、字段与具体编码值，降低业务排错门槛。
+  2026-10-23 12:19:44 | 列表规范化 | 结果集汇总表字段调整：[原始开单科室代码] 改名为 [HIS科室ID] 置于首列，[字典桥接HIS编码] 改名为 [HIS科室编码] 并前置至第二列，提升核对直观度。
+  2026-10-23 12:28:51 | 技术底层修复 | 拉链时间匹配改用 CONVERT(VARCHAR(8), ..., 112) 转 YYYYMMDD 边界比对，解决 DATETIME 精度差异与 9999 年极值导致的误判。
 =============================================================================== */
 
 
@@ -172,7 +174,7 @@ WITH cte_bmb_bridge AS (
 )
 ,cte_diag AS (
     -- ── Logical CTE: 拉链映射匹配 + 三层断链根因判定（结果集互斥且完备） ──
-    -- 判定顺序: 字典缺失 → 映射未配置 → 时间区间不匹配；[执行时间] 落区间采用半开 [START_DATE, END_DATE)。
+    -- 判定顺序: 字典缺失 → 映射未配置 → 时间区间不匹配；时间按 YYYYMMDD 日粒度闭区间比对。
     -- 仅输出未命中核算单元的行；为避免同编码多配置行导致的失败匹配放大，按事实主键维度收敛至 1 行。
     SELECT
         k.[SRC_TYPE]
@@ -202,8 +204,9 @@ WITH cte_bmb_bridge AS (
     FROM cte_keyed AS k
     LEFT JOIN cte_dept_unit_mapping AS m
         ON k.[HIS_DEPT_CODE] = m.[HIS_DEPT_CODE]
-       AND k.[EXEC_TIME] >= m.[START_DATE]
-       AND (m.[END_DATE] IS NULL OR k.[EXEC_TIME] < m.[END_DATE])
+       -- YYYYMMDD 日粒度比对
+       AND CONVERT(VARCHAR(8), ISNULL(k.[EXEC_TIME], k.[PAY_TIME]), 112) >= CONVERT(VARCHAR(8), m.[START_DATE], 112)
+       AND CONVERT(VARCHAR(8), ISNULL(k.[EXEC_TIME], k.[PAY_TIME]), 112) <= CONVERT(VARCHAR(8), ISNULL(m.[END_DATE], '9999-12-31'), 112)
     LEFT JOIN cte_configured AS cfg
         ON k.[HIS_DEPT_CODE] = cfg.[HIS_DEPT_CODE]
     LEFT JOIN cte_config_span AS sp
@@ -273,9 +276,9 @@ FROM cte_diag AS d
 -- 数据源: #TMP_DIAG（物化后的断链诊断明细，与结果集 2 共享同一份计算结果）
 -- =================================================================
 SELECT
-    d.[DEPT_ID]                                                     AS [原始开单科室代码]
+    d.[DEPT_ID]                                                     AS [HIS科室ID]
+   ,ISNULL(d.[HIS_DEPT_CODE], N'')                                  AS [HIS科室编码]
    ,ISNULL(d.[DEPT_NAME], N'')                                      AS [原始开单科室名称]
-   ,ISNULL(d.[HIS_DEPT_CODE], N'')                                  AS [字典桥接HIS编码]
    ,d.[BREAK_TYPE]                                                  AS [断链类型诊断]
    ,CASE
         WHEN d.[BREAK_TYPE] = N'字典缺失'
@@ -321,14 +324,14 @@ ORDER BY
     [断链类型诊断] ASC
    ,[影响总金额] DESC
    ,[影响事实明细行数] DESC
-   ,[原始开单科室代码] ASC
+   ,[HIS科室ID] ASC
 ;
 
 -- =================================================================
 -- 结果集 2：未映射事实明细抽样表（UNIT_CODE = 'UNKNOWN' 的行级明细透传）
 -- 用途: 定位到具体患者 / 单据 / 项目，核对单笔归属与断链原因。
 -- 说明: 执行时请取消下方 TOP 截断注释，或将查询结果集 1 中的重点科室通过
---       「AND d.[DEPT_ID] = <原始开单科室代码>」收敛后再导出，避免千万级明细全量拉取。
+--       「AND d.[DEPT_ID] = <HIS科室ID>」收敛后再导出，避免千万级明细全量拉取。
 -- 数据源: #TMP_DIAG（物化后的断链诊断明细，与结果集 1 共享同一份计算结果）
 -- =================================================================
 SELECT TOP (5000)
