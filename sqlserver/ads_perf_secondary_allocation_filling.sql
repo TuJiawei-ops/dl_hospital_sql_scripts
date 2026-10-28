@@ -22,7 +22,7 @@ CREATE TABLE [dbo].[ads_perf_secondary_allocation_filling] (
     [org_code]              NVARCHAR(50)        NOT NULL,   -- 机构编码（系统固定配置，如 1001）
     [org_name]              NVARCHAR(200)       NULL,       -- 机构名称
     -- 核算单元维度（复合主键组成部分）
-    [unit_code]             NVARCHAR(100)       NOT NULL,   -- 核算单元编码（HPS_DEPT_CODE）
+    [unit_code]             NVARCHAR(100)       NOT NULL,   -- 核算单元编码
     [unit_name]             NVARCHAR(200)       NULL,       -- 核算单元名称
     -- 员工维度（复合主键组成部分：二次分配明细落脚点）
     [staff_code]            NVARCHAR(50)        NOT NULL,   -- 员工编码

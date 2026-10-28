@@ -15,7 +15,7 @@ CREATE TABLE [dbo].[ads_perf_dept_user_auth] (
     -- 机构与核算单元维度
     [org_code]              NVARCHAR(50)        NOT NULL,   -- 机构编码（如 1001）
     [org_name]              NVARCHAR(200)       NULL,       -- 机构名称
-    [unit_code]             NVARCHAR(100)       NOT NULL,   -- 核算单元编码（HPS_DEPT_CODE）
+    [unit_code]             NVARCHAR(100)       NOT NULL,   -- 核算单元编码
     [unit_name]             NVARCHAR(200)       NULL,       -- 核算单元名称
     -- 员工权限主体维度
     [staff_code]            NVARCHAR(50)        NOT NULL,   -- 员工编码

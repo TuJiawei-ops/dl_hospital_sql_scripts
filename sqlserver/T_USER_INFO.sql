@@ -12,7 +12,7 @@
  Target Server Version : 16001210 (16.00.1210)
  File Encoding         : 65001
 
- Date: 28/10/2026 11:14:03
+ Date: 28/10/2026 13:19:38
 */
 
 
@@ -79,7 +79,7 @@ EXEC sp_addextendedproperty
 GO
 
 EXEC sp_addextendedproperty
-'MS_Description', N'员工ID',
+'MS_Description', N'员工ID -- T_USER_INFO.STAFF_ID = T_STAFF.ID。',
 'SCHEMA', N'dbo',
 'TABLE', N'T_USER_INFO',
 'COLUMN', N'STAFF_ID'

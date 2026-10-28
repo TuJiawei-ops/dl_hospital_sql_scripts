@@ -20,8 +20,8 @@ CREATE TABLE [dbo].[ads_perf_primary_settlement] (
     [org_code]              NVARCHAR(50)        NOT NULL,   -- 机构编码
     [org_name]              NVARCHAR(200)       NULL,       -- 机构名称
     -- 核算单元维度（复合主键组成部分）
-    [unit_code]             NVARCHAR(100)       NOT NULL,   -- 核算单元编码（HPS_DEPT_CODE）
-    [unit_name]             NVARCHAR(200)       NULL,       -- 核算单元名称（HPS_DEPT_NAME）
+    [unit_code]             NVARCHAR(100)       NOT NULL,   -- 核算单元编码
+    [unit_name]             NVARCHAR(200)       NULL,       -- 核算单元名称
     -- 最终结算金额
     [primary_amount]        DECIMAL(18,8)       NOT NULL,   -- 一次分配最终结算总额（核定额上限）
     [final_time]            DATETIME2(3)        NULL,       -- 期间结账定稿时间
