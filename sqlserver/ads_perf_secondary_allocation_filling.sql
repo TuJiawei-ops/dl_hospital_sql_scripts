@@ -9,6 +9,7 @@
 -- 2026-10-28 10:43:19 | 脚本新建 | 新建二次分配额度填报底账 DDL：业务复合主键、核定额快照与填报/审核时点，含表级与列级 MS_Description。
 -- 2026-10-28 11:30:00 | 结构升级 | 粒度下沉至员工层：新增 unit_name/staff_code/staff_name，主键追加 staff_code，注释同步补列。
 -- 2026-10-28 11:55:00 | 字段扩展 | 追加 remark(NVARCHAR(500)) 备注/调整说明列及列级 MS_Description，主键与粒度零改动。
+-- 2026-10-28 13:32:49 | 字段扩展 | audit_time 之后追加 audit_user(NVARCHAR(100))/audit_remark(NVARCHAR(500)) 审核信息列及列级 MS_Description。
 -- =================================================================
 
 IF OBJECT_ID('[dbo].[ads_perf_secondary_allocation_filling]', 'U') IS NOT NULL
@@ -35,6 +36,8 @@ CREATE TABLE [dbo].[ads_perf_secondary_allocation_filling] (
         CONSTRAINT [df_ads_perf_secondary_allocation_filling_fill_status] DEFAULT (0), -- 填报状态：0-未填报/草稿 1-已提交 2-已审核/已发布
     [submit_time]           DATETIME2(3)        NULL,       -- 提交填报时间
     [audit_time]            DATETIME2(3)        NULL,       -- 审核定稿时间
+    [audit_user]            NVARCHAR(100)       NULL,       -- 审核人
+    [audit_remark]          NVARCHAR(500)       NULL,       -- 审核意见/批复说明
     -- 通用审计 4 字段
     [create_user]           NVARCHAR(100)       NULL,       -- 创建人
     [create_time]           DATETIME2(3)        NOT NULL
@@ -103,6 +106,12 @@ EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'提交填报�
 
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'审核定稿时间',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'ads_perf_secondary_allocation_filling', @level2type = N'COLUMN', @level2name = N'audit_time';
+
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'审核人',
+    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'ads_perf_secondary_allocation_filling', @level2type = N'COLUMN', @level2name = N'audit_user';
+
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'审核意见/批复说明',
+    @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'ads_perf_secondary_allocation_filling', @level2type = N'COLUMN', @level2name = N'audit_remark';
 
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'创建人',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'ads_perf_secondary_allocation_filling', @level2type = N'COLUMN', @level2name = N'create_user';
