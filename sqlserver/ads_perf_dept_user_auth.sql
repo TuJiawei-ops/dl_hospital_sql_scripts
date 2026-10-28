@@ -56,7 +56,7 @@ EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'机构编码',
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'机构名称',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'ads_perf_dept_user_auth', @level2type = N'COLUMN', @level2name = N'org_name';
 
-EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'核算单元编码（HPS_DEPT_CODE）',
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'核算单元编码',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'ads_perf_dept_user_auth', @level2type = N'COLUMN', @level2name = N'unit_code';
 
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'核算单元名称',

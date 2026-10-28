@@ -36,7 +36,7 @@ CREATE TABLE [dbo].[DWD_FIN_CALC_ALLOC1_DETAIL_LOG] (
     [SCRIPT_NAME]           NVARCHAR(200)       NULL,       -- 执行脚本/算子名称（运维追溯源文件名）
     -- ===== 核算单元维度 =====
     [UNIT_CODE]             NVARCHAR(100)       NOT NULL,   -- 核算单元编码（HPS_DEPT_CODE，未映射兜底 'UNKNOWN'）
-    [UNIT_NAME]             NVARCHAR(200)       NULL,       -- 核算单元名称（HPS_DEPT_NAME）
+    [UNIT_NAME]             NVARCHAR(200)       NULL,       -- 核算单元名称
     -- ===== 项目/指标维度（一次分配核心列） =====
     [PROJ_CODE]             NVARCHAR(60)        NOT NULL,   -- 医疗项目/考核指标编码（一次分配核心粒度，防 NULL 碰撞）
     [PROJ_NAME]             NVARCHAR(600)       NULL,       -- 医疗项目/考核指标名称
@@ -122,7 +122,7 @@ EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'核算脚本/�
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'核算单元编码（HPS_DEPT_CODE，未映射兜底 UNKNOWN）',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_ALLOC1_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'UNIT_CODE';
 
-EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'核算单元名称（HPS_DEPT_NAME）',
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'核算单元名称',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'DWD_FIN_CALC_ALLOC1_DETAIL_LOG', @level2type = N'COLUMN', @level2name = N'UNIT_NAME';
 
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'医疗项目/考核指标编码（一次分配核心粒度，物理 NOT NULL，防 NULL 碰撞）',

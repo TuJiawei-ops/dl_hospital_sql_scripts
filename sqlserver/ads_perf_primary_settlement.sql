@@ -61,10 +61,10 @@ EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'机构编码',
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'机构名称',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'ads_perf_primary_settlement', @level2type = N'COLUMN', @level2name = N'org_name';
 
-EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'核算单元编码（HPS_DEPT_CODE）',
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'核算单元编码',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'ads_perf_primary_settlement', @level2type = N'COLUMN', @level2name = N'unit_code';
 
-EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'核算单元名称（HPS_DEPT_NAME）',
+EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'核算单元名称',
     @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'ads_perf_primary_settlement', @level2type = N'COLUMN', @level2name = N'unit_name';
 
 EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'一次分配最终结算总额（二次分配填报的核定额上限）',
