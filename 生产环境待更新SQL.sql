@@ -50,3 +50,14 @@ INSERT INTO [dbo].[data_import] ([id], [parent_id], [field_name], [field_type], 
 -- 2026年10月30日 13点09分
 INSERT INTO [dbo].[T_RESOURCE_INFO] ([ID], [SYSTEM_ID], [FUN_NODE], [LABEL], [COMPONENT_NAME], [NAME], [PARENT_ID], [PATH], [SERVER_URL], [SORT_NUMBER], [COMPONENT], [MENU_TYPE], [EQUIPMENT_TYPE], [IS_KEEP_ALIVE], [IS_HIDE], [ICON], [PERMS], [STATUS], [CREATE_USER], [CREATE_TIME], [MODIFY_USER], [MODIFY_TIME], [DELETE_FLAG], [BTN_CODE], [micro_name], [PARENT_NAME]) VALUES (2116034743696445441, NULL, NULL, NULL, NULL, N'撤回', 1942402761383583745, NULL, NULL, NULL, NULL, 2, 1, NULL, 0, NULL, NULL, 1, 1688431883371515906, '2026-10-30 13:09:31.5910000', 1688431883371515906, '2026-10-30 13:09:31.5910000', 0, 'kscalculateSave:withdraw', NULL, '科室核算表确认');
 INSERT INTO [dbo].[T_RESOURCE_INFO] ([ID], [SYSTEM_ID], [FUN_NODE], [LABEL], [COMPONENT_NAME], [NAME], [PARENT_ID], [PATH], [SERVER_URL], [SORT_NUMBER], [COMPONENT], [MENU_TYPE], [EQUIPMENT_TYPE], [IS_KEEP_ALIVE], [IS_HIDE], [ICON], [PERMS], [STATUS], [CREATE_USER], [CREATE_TIME], [MODIFY_USER], [MODIFY_TIME], [DELETE_FLAG], [BTN_CODE], [micro_name], [PARENT_NAME]) VALUES (2116034136650633217, NULL, NULL, NULL, NULL, N'确认', 1942402761383583745, NULL, NULL, NULL, NULL, 2, 1, NULL, 0, NULL, NULL, 1, 1688431883371515906, '2026-10-30 13:07:06.8200000', 1688431883371515906, '2026-10-30 13:07:06.8200000', 0, 'kscalculateSave:confirm', NULL, '科室核算表确认');
+
+
+UPDATE [dbo].[ads_dept_post_coefficient_m]
+SET [unit_code] = N'UNIT021'
+WHERE [unit_code] = N'100045';
+
+
+-- 2026年10月31日09点07分 
+-- 人员表 ID 显示出来给
+UPDATE [dbo].[data_middle_base] SET [parent_id] = 1928880610526322690, [field_name] = N'id', [param_description] = N'ID', [field_type] = N'int', [business_type] = N'无', [creator_id] = 1688431883371515906, [createtime] = '2025-06-01 02:25:49.0880000', [modifier_id] = 1688431883371515906, [modifytime] = '2025-12-29 09:58:10.2810000', [deleted] = 0, [field_query] = 0, [sort] = 1, [field_sort] = 1 WHERE [id] = 1928880610526322691;
+UPDATE [dbo].[data_middle_base] SET [parent_id] = 1928879755068661761, [field_name] = N'id', [param_description] = N'ID', [field_type] = N'numeric', [business_type] = N'无', [creator_id] = 1688431883371515906, [createtime] = '2025-06-01 02:22:25.1200000', [modifier_id] = 1688431883371515906, [modifytime] = '2025-12-29 10:13:34.7860000', [deleted] = 0, [field_query] = 0, [sort] = 1, [field_sort] = 1 WHERE [id] = 1928879755068661762;
