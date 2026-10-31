@@ -2,7 +2,8 @@
   Relative Path : 一次分配/一次分配最终绩效金额.sql
   脚本名称: 一次分配最终绩效金额.sql
   业务说明: 汇总当月核算单元涉及的各个核算子项（10 加 1 减），动态读取
-            DWD_FIN_CALC_ALLOC1_DETAIL_LOG 表中各项真实 ITEM_NAME 并代数求和落库。
+            DWD_FIN_CALC_ALLOC1_DETAIL_LOG 表中各项真实 ITEM_NAME 并代数求和，
+            最终结果四舍五入取整后落库。
   数据流向: dbo.[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]（11 项一次分配子项）
             → dbo.[DWD_FIN_CALC_ALLOC1_DETAIL_LOG]
             (ITEM_CODE=ITEM_ALLOC1_FINAL_PERF_AMOUNT / FINAL_VALUE_TYPE=AMOUNT)
@@ -11,9 +12,12 @@
   模板占位符: '{year}' / '{month}' / {struct_codes}
 
   关键约束: 源过滤显式排除自身核算项 ITEM_ALLOC1_FINAL_PERF_AMOUNT，杜绝二次重算自增；
-            全部子项名称从日志表动态映射，交叉透视层零硬编码名称。
+            全部子项名称从日志表动态映射，交叉透视层零硬编码名称；
+            每个核算单元的最终绩效在落库前四舍五入取整到元，FINAL_VALUE 与审计文本、
+            CALC_DETAIL_JSON（取整前 / 取整差额 / 取整后）三处口径一致。
 
   修改日志:
+  2026-10-31 09:30:00 | 取整环节 | 每个核算单元最终绩效新增「四舍五入取整到元」步骤：FINAL_VALUE 落取整后金额，审计文本增加取整结算段，JSON 补取整前金额/取整方式/取整差额。
   2026-10-27 18:00:00 | 脚本重构 | 物理更名为 一次分配最终绩效金额.sql，解耦硬编码，动态映射日志表 ITEM_NAME。
    =============================================================================== */
 
@@ -119,7 +123,7 @@ unit_agg AS (
           + a.[UNIT_REWARD]
           - a.[UNIT_PUNISH]
           + a.[OFFLINE_PERF]
-        AS DECIMAL(18,8))                               AS FINAL_PERF
+        AS DECIMAL(18,8))                               AS FINAL_PERF_RAW
     FROM (
         SELECT
             s.[UNIT_CODE],
@@ -142,6 +146,27 @@ unit_agg AS (
             s.[UNIT_CODE],
             n.[UNIT_NAME]
     ) AS a
+),
+
+-- 最终取整：四舍五入到元（0 位小数），持久化以此为准
+unit_calc AS (
+    SELECT
+        u.[UNIT_CODE],
+        u.[UNIT_NAME],
+        u.[ENROLL_SCORE],
+        u.[ORDER_SCORE],
+        u.[EXEC_SCORE],
+        u.[DIAG_NON_PED_SCORE],
+        u.[DIAG_PED_SCORE],
+        u.[DISCHARGE_SCORE],
+        u.[ADM_NOTICE_SCORE],
+        u.[SPECIAL_INCENTIVE],
+        u.[UNIT_REWARD],
+        u.[UNIT_PUNISH],
+        u.[OFFLINE_PERF],
+        u.[FINAL_PERF_RAW],
+        CAST(ROUND(u.[FINAL_PERF_RAW], 0) AS DECIMAL(18,8)) AS FINAL_PERF
+    FROM unit_agg AS u
 ),
 
 -- 动态 JSON 明细构建（名称取自 dim_item_name）
@@ -171,7 +196,7 @@ item_unpivot AS (
         ON d.[ITEM_CODE] = v.[ITEM_CODE]
 ),
 
--- 三段式审计文本与打包
+-- 四段式审计文本与打包
 final AS (
     SELECT
         CAST('{year}'  AS VARCHAR(4))                   AS CALC_YEAR,
@@ -189,11 +214,12 @@ final AS (
         c.[UNIT_REWARD],
         c.[UNIT_PUNISH],
         c.[OFFLINE_PERF],
+        c.[FINAL_PERF_RAW],
         c.[FINAL_PERF],
-        -- 审计文本三段式
+        -- 审计文本四段式（末段体现取整结算）
         CONCAT(
             N'一次分配最终绩效金额 | '
-           ,N'一次分配最终绩效金额 = 10项子金额累加 - 单元惩罚金额 | '
+           ,N'一次分配最终绩效金额 = 10项子金额累加 - 单元惩罚金额，最终结果四舍五入取整 | '
            ,CAST(c.[ENROLL_SCORE]       AS VARCHAR(50)), N' + '
            ,CAST(c.[ORDER_SCORE]        AS VARCHAR(50)), N' + '
            ,CAST(c.[EXEC_SCORE]         AS VARCHAR(50)), N' + '
@@ -205,9 +231,11 @@ final AS (
            ,CAST(c.[UNIT_REWARD]        AS VARCHAR(50)), N' - '
            ,CAST(c.[UNIT_PUNISH]        AS VARCHAR(50)), N' + '
            ,CAST(c.[OFFLINE_PERF]       AS VARCHAR(50)), N' = '
+           ,CAST(c.[FINAL_PERF_RAW]     AS VARCHAR(50)), N' | '
+           ,CAST(c.[FINAL_PERF_RAW]     AS VARCHAR(50)), N' = '
            ,CAST(c.[FINAL_PERF]         AS VARCHAR(50))
         )                                               AS CALC_PROCESS_TEXT
-    FROM unit_agg AS c
+    FROM unit_calc AS c
 )
 
 -- 落库封装
@@ -244,6 +272,9 @@ SELECT
             f.[CALC_MONTH]                              AS [核算月份],
             f.[UNIT_CODE]                               AS [核算单元编码],
             f.[UNIT_NAME]                               AS [核算单元名称],
+            CAST(f.[FINAL_PERF_RAW] AS DECIMAL(18,8))   AS [取整前金额],
+            N'四舍五入取整到元（保留 0 位小数）'          AS [取整方式],
+            CAST(f.[FINAL_PERF] - f.[FINAL_PERF_RAW] AS DECIMAL(18,8)) AS [取整差额],
             CAST(f.[FINAL_PERF] AS DECIMAL(18,8))       AS [一次分配最终绩效金额],
             f.[CALC_PROCESS_TEXT]                       AS [计算过程描述],
             -- 子项明细快照（名称动态映射）
