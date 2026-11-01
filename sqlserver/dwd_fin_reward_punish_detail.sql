@@ -29,6 +29,9 @@ Relative Path : sqlserver/dwd_fin_reward_punish_detail.sql
                对齐全局精度强制标准（AMOUNT 记为元，SCORE 记为分，量纲由 metric_type 唯一决定）。
 编码字段语义 : org_code / unit_code / staff_code / item_cat_code / item_code 全量 VARCHAR 字符串语义，
                严禁 CAST 为 INT/BIGINT（防前导零丢失与跨表 JOIN 关联失配）。
+发起方语义   : origin_type / origin_name / origin_ref_no 以通用文本描述奖惩的发起方与依据，
+               不建部门或人员外键——发起方可能是虚拟组（医疗组、护理组、专项组）或会议，
+               统一由 origin_name 承载，origin_type 仅做轻量分类；细粒度事由仍写 remark。
 索引策略     : 聚簇主键 pk_dwd_fin_reward_punish_detail（[ID]）保障行级唯一寻址与 ORM 单列定位；
                业务唯一性由两条过滤唯一索引承担 —— uq_..._staff（staff_code IS NOT NULL，
                含 staff_code 的 9 列）与 uq_..._dept（staff_code IS NULL，8 列），
@@ -38,6 +41,7 @@ Relative Path : sqlserver/dwd_fin_reward_punish_detail.sql
 会话无关性   : 无 DATEFIRST / LANGUAGE 会话依赖。
 模板占位符   : 无（纯 DDL，不含 '{year}' / '{month}' / '{start_time}' / '{end_time}' / {struct_codes} 动态注入）。
 修改日志：
+2026-11-01 21:05:00 | 字段扩展 | 新增 origin_type / origin_name / origin_ref_no 通用发起方描述列（兼容科室、医疗组/护理组等虚拟组与会议，不建部门人员外键）及列级 MS_Description；业务唯一键、CHECK、索引、示例零改动。
 2026-10-28 19:40:00 | 主键回调 | 应「科室整体奖惩可为空」语义，staff_code 恢复可空并退出主键；聚簇主键回归 [ID]；业务唯一性改由两条过滤唯一索引（个人行 staff_code IS NOT NULL / 科室行 staff_code IS NULL）保证；表级与列级注释、5.1 示例同步回调。
 2026-10-28 19:05:00 | 主键重构 | 撤销自增 id 主键，改为业务复合主键（calc_year, calc_month, org_code, unit_code, staff_code, item_code, record_date, category, metric_type）；新增框架兼容列 [ID] BIGINT IDENTITY 并绑定唯一约束；staff_code 由可空收紧为 NOT NULL DEFAULT 'NONE'（科室整体奖惩哨兵）；扩展属性与 5.1 示例同步改口径。
 2026-10-12 18:30:00 | 约束升级 | [unit_price]/[amount] 新增 CHECK >= 0.00000000 非负绝对值硬约束（ck_dwd_fin_reward_punish_detail_unit_price / ck_dwd_fin_reward_punish_detail_amount）；符号口径由「奖励正惩罚负」改为「一律正数绝对值 + category 定加减」；表级与字段级扩展属性、5.1/5.3 示例、5.4 净额汇总算式同步改口径。
@@ -88,6 +92,11 @@ CREATE TABLE [dbo].[dwd_fin_reward_punish_detail] (
     [unit_price]     DECIMAL(18,8)  NOT NULL DEFAULT (0.00000000),      -- 标准值（AMOUNT：元/次；SCORE：分/次；正数绝对值，严禁负数）
     [quantity]       DECIMAL(18,8)  NOT NULL DEFAULT (1.00000000),      -- 数量/频次
     [amount]         DECIMAL(18,8)  NOT NULL DEFAULT (0.00000000),      -- 最终奖惩值（AMOUNT=金额(元)，SCORE=分值(分)；正数绝对值，加减由 category 决定）
+
+    -- ===== 发起方与依据（通用描述，兼容科室 / 虚拟组 / 会议）=====
+    [origin_type]    VARCHAR(20)    NULL,                               -- 发起方类型（DEPT 科室 / GROUP 专项组 / MEETING 会议 / OTHER 其他）
+    [origin_name]    NVARCHAR(200)  NULL,                               -- 发起方名称（自由文本，如 医疗质量专项组 / 护理组 / 院周会）
+    [origin_ref_no]  VARCHAR(100)   NULL,                               -- 依据文号 / 会议纪要编号 / 检查批次号
 
     -- ===== 说明与审计字段 =====
     [remark]         NVARCHAR(1000) NULL,                               -- 事由与备注说明
@@ -163,6 +172,9 @@ EXEC sp_addextendedproperty N'MS_Description', N'度量类型（NOT NULL，默�
 EXEC sp_addextendedproperty N'MS_Description', N'标准值（DECIMAL(18,8) 高精度，默认 0.00000000；量纲由 metric_type 决定：AMOUNT 为元/次，SCORE 为分/次）；所有金额与分值统一录入正数绝对值（受 CHECK ([unit_price] >= 0) 物理约束），严禁录入负数；加减性质由 category 决定', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'unit_price';
 EXEC sp_addextendedproperty N'MS_Description', N'数量/频次（DECIMAL(18,8) 高精度，默认 1.00000000，支持按次/按人次/按天计量，与 unit_price 同量纲乘积得 amount）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'quantity';
 EXEC sp_addextendedproperty N'MS_Description', N'最终奖惩值（DECIMAL(18,8) 高精度，默认 0.00000000；AMOUNT 时为金额（元），SCORE 时为分值（分））；所有金额与分值统一录入正数绝对值（受 CHECK ([amount] >= 0) 物理约束），严禁录入负数，加减性质由 category 决定（REWARD 计入奖励池、PUNISH 计入惩罚池，下游计算净额时按 category 施加符号）；跨 metric_type 汇总严禁直接相加', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'amount';
+EXEC sp_addextendedproperty N'MS_Description', N'发起方类型（可空；轻量分类，不做外键校验：DEPT 科室 / GROUP 专项组 / MEETING 会议 / OTHER 其他；与 create_user 的录入人区分）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'origin_type';
+EXEC sp_addextendedproperty N'MS_Description', N'发起方名称（可空，自由文本：可为科室、医疗组/护理组/专项组等虚拟组、院周会等会议；发起方不是组织架构稳定实体，故不建部门外键）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'origin_name';
+EXEC sp_addextendedproperty N'MS_Description', N'发起方依据编号（可空：处罚文号 / 会议纪要编号 / 检查批次号等，用于追溯奖惩来源文件）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'origin_ref_no';
 EXEC sp_addextendedproperty N'MS_Description', N'事由与备注说明（承载处罚文号、投诉工单号、奖励依据等追溯信息）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'remark';
 EXEC sp_addextendedproperty N'MS_Description', N'创建人（默认 system，业务录入时写明操作人工号）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'create_user';
 EXEC sp_addextendedproperty N'MS_Description', N'创建时间（默认 GETDATE()）', N'SCHEMA', N'dbo', N'TABLE', N'dwd_fin_reward_punish_detail', N'COLUMN', N'create_time';
