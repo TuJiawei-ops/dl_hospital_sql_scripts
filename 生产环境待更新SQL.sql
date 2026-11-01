@@ -61,3 +61,57 @@ WHERE [unit_code] = N'100045';
 -- 人员表 ID 显示出来给
 UPDATE [dbo].[data_middle_base] SET [parent_id] = 1928880610526322690, [field_name] = N'id', [param_description] = N'ID', [field_type] = N'int', [business_type] = N'无', [creator_id] = 1688431883371515906, [createtime] = '2025-06-01 02:25:49.0880000', [modifier_id] = 1688431883371515906, [modifytime] = '2025-12-29 09:58:10.2810000', [deleted] = 0, [field_query] = 0, [sort] = 1, [field_sort] = 1 WHERE [id] = 1928880610526322691;
 UPDATE [dbo].[data_middle_base] SET [parent_id] = 1928879755068661761, [field_name] = N'id', [param_description] = N'ID', [field_type] = N'numeric', [business_type] = N'无', [creator_id] = 1688431883371515906, [createtime] = '2025-06-01 02:22:25.1200000', [modifier_id] = 1688431883371515906, [modifytime] = '2025-12-29 10:13:34.7860000', [deleted] = 0, [field_query] = 0, [sort] = 1, [field_sort] = 1 WHERE [id] = 1928879755068661762;
+
+
+
+INSERT INTO [dbo].[T_RESOURCE_INFO] ([ID], [SYSTEM_ID], [FUN_NODE], [LABEL], [COMPONENT_NAME], [NAME], [PARENT_ID], [PATH], [SERVER_URL], [SORT_NUMBER], [COMPONENT], [MENU_TYPE], [EQUIPMENT_TYPE], [IS_KEEP_ALIVE], [IS_HIDE], [ICON], [PERMS], [STATUS], [CREATE_USER], [CREATE_TIME], [MODIFY_USER], [MODIFY_TIME], [DELETE_FLAG], [BTN_CODE], [micro_name], [PARENT_NAME]) VALUES (2116382088786026497, NULL, NULL, NULL, NULL, N'全院汇总视图', 2116381841997373441, NULL, NULL, NULL, NULL, 2, 1, NULL, 0, NULL, NULL, 1, 1688431883371515906, '2026-10-31 12:09:45.1020000', 1688431883371515906, '2026-10-31 12:09:45.1020000', 0, 'primarySignSheet:summary', NULL, '一次分配签认表');
+INSERT INTO [dbo].[T_RESOURCE_INFO] ([ID], [SYSTEM_ID], [FUN_NODE], [LABEL], [COMPONENT_NAME], [NAME], [PARENT_ID], [PATH], [SERVER_URL], [SORT_NUMBER], [COMPONENT], [MENU_TYPE], [EQUIPMENT_TYPE], [IS_KEEP_ALIVE], [IS_HIDE], [ICON], [PERMS], [STATUS], [CREATE_USER], [CREATE_TIME], [MODIFY_USER], [MODIFY_TIME], [DELETE_FLAG], [BTN_CODE], [micro_name], [PARENT_NAME]) VALUES (2116382010113466370, NULL, NULL, NULL, NULL, N'导出签认表', 2116381841997373441, NULL, NULL, NULL, NULL, 2, 1, NULL, 0, NULL, NULL, 1, 1688431883371515906, '2026-10-31 12:09:26.3590000', 1688431883371515906, '2026-10-31 12:09:26.3590000', 0, 'primarySignSheet:export', NULL, '一次分配签认表');
+INSERT INTO [dbo].[T_RESOURCE_INFO] ([ID], [SYSTEM_ID], [FUN_NODE], [LABEL], [COMPONENT_NAME], [NAME], [PARENT_ID], [PATH], [SERVER_URL], [SORT_NUMBER], [COMPONENT], [MENU_TYPE], [EQUIPMENT_TYPE], [IS_KEEP_ALIVE], [IS_HIDE], [ICON], [PERMS], [STATUS], [CREATE_USER], [CREATE_TIME], [MODIFY_USER], [MODIFY_TIME], [DELETE_FLAG], [BTN_CODE], [micro_name], [PARENT_NAME]) VALUES (2116381949015040002, NULL, NULL, NULL, NULL, N'查看', 2116381841997373441, NULL, NULL, NULL, NULL, 2, 1, NULL, 0, NULL, NULL, 1, 1688431883371515906, '2026-10-31 12:09:11.7830000', 1688431883371515906, '2026-10-31 12:09:11.7830000', 0, 'primarySignSheet:list', NULL, '一次分配签认表');
+INSERT INTO [dbo].[T_RESOURCE_INFO] ([ID], [SYSTEM_ID], [FUN_NODE], [LABEL], [COMPONENT_NAME], [NAME], [PARENT_ID], [PATH], [SERVER_URL], [SORT_NUMBER], [COMPONENT], [MENU_TYPE], [EQUIPMENT_TYPE], [IS_KEEP_ALIVE], [IS_HIDE], [ICON], [PERMS], [STATUS], [CREATE_USER], [CREATE_TIME], [MODIFY_USER], [MODIFY_TIME], [DELETE_FLAG], [BTN_CODE], [micro_name], [PARENT_NAME]) VALUES (2116381841997373441, NULL, NULL, NULL, NULL, N'一次分配签认表', 2116349842989486082, N'/primarySignSheet/index', NULL, 1, N'primarySignSheet', 1, 1, NULL, 0, NULL, NULL, 1, 1688431883371515906, '2026-10-31 12:08:45.8330000', 1688431883371515906, '2026-10-31 12:08:45.8330000', 0, NULL, NULL, '绩效签认');
+INSERT INTO [dbo].[T_RESOURCE_INFO] ([ID], [SYSTEM_ID], [FUN_NODE], [LABEL], [COMPONENT_NAME], [NAME], [PARENT_ID], [PATH], [SERVER_URL], [SORT_NUMBER], [COMPONENT], [MENU_TYPE], [EQUIPMENT_TYPE], [IS_KEEP_ALIVE], [IS_HIDE], [ICON], [PERMS], [STATUS], [CREATE_USER], [CREATE_TIME], [MODIFY_USER], [MODIFY_TIME], [DELETE_FLAG], [BTN_CODE], [micro_name], [PARENT_NAME]) VALUES (2116352209856204802, NULL, NULL, NULL, NULL, N'查看', 2116351739347570690, NULL, NULL, NULL, NULL, 2, 1, NULL, 0, NULL, NULL, 1, 1688431883371515906, '2026-10-31 10:11:01.4120000', 1688431883371515906, '2026-10-31 10:11:01.4120000', 0, 'unitSignSheet:list', NULL, '核算单元签认表');
+INSERT INTO [dbo].[T_RESOURCE_INFO] ([ID], [SYSTEM_ID], [FUN_NODE], [LABEL], [COMPONENT_NAME], [NAME], [PARENT_ID], [PATH], [SERVER_URL], [SORT_NUMBER], [COMPONENT], [MENU_TYPE], [EQUIPMENT_TYPE], [IS_KEEP_ALIVE], [IS_HIDE], [ICON], [PERMS], [STATUS], [CREATE_USER], [CREATE_TIME], [MODIFY_USER], [MODIFY_TIME], [DELETE_FLAG], [BTN_CODE], [micro_name], [PARENT_NAME]) VALUES (2116352101500555266, NULL, NULL, NULL, NULL, N'导出签字表', 2116351739347570690, NULL, NULL, NULL, NULL, 2, 1, NULL, 0, NULL, NULL, 1, 1688431883371515906, '2026-10-31 10:10:35.5830000', 1688431883371515906, '2026-10-31 10:16:37.0962237', 0, 'unitSignSheet:export', NULL, '核算单元签认表');
+INSERT INTO [dbo].[T_RESOURCE_INFO] ([ID], [SYSTEM_ID], [FUN_NODE], [LABEL], [COMPONENT_NAME], [NAME], [PARENT_ID], [PATH], [SERVER_URL], [SORT_NUMBER], [COMPONENT], [MENU_TYPE], [EQUIPMENT_TYPE], [IS_KEEP_ALIVE], [IS_HIDE], [ICON], [PERMS], [STATUS], [CREATE_USER], [CREATE_TIME], [MODIFY_USER], [MODIFY_TIME], [DELETE_FLAG], [BTN_CODE], [micro_name], [PARENT_NAME]) VALUES (2116351739347570690, NULL, NULL, NULL, NULL, N'核算单元签认表', 2116349842989486082, N'/unitSignSheet/index', NULL, 1, N'unitSignSheet', 1, 1, NULL, 0, NULL, NULL, 1, 1688431883371515906, '2026-10-31 10:09:09.2430000', 1688431883371515906, '2026-10-31 10:09:09.2430000', 0, NULL, NULL, '绩效签认');
+INSERT INTO [dbo].[T_RESOURCE_INFO] ([ID], [SYSTEM_ID], [FUN_NODE], [LABEL], [COMPONENT_NAME], [NAME], [PARENT_ID], [PATH], [SERVER_URL], [SORT_NUMBER], [COMPONENT], [MENU_TYPE], [EQUIPMENT_TYPE], [IS_KEEP_ALIVE], [IS_HIDE], [ICON], [PERMS], [STATUS], [CREATE_USER], [CREATE_TIME], [MODIFY_USER], [MODIFY_TIME], [DELETE_FLAG], [BTN_CODE], [micro_name], [PARENT_NAME]) VALUES (2116349842989486082, NULL, NULL, NULL, NULL, N'绩效签认', NULL, N'/perfSign', NULL, 86, N'perfSign', 1, 1, NULL, 0, NULL, NULL, 1, 1688431883371515906, '2026-10-31 10:01:37.0690000', 1688431883371515906, '2026-10-31 10:05:32.7202830', 0, NULL, NULL, NULL);
+
+
+
+-- 1) 加列（可重复执行需先判断）
+ALTER TABLE data_connection ADD
+  scope_enabled      tinyint      NOT NULL CONSTRAINT DF_dc_scope_enabled DEFAULT 0,
+  scope_unit_column  varchar(128) NULL,
+  scope_staff_column varchar(128) NULL;
+
+-- 2) 初始化：全部保持"不启用"（= 上线零行为变化）
+UPDATE data_connection SET scope_enabled = 0 WHERE scope_enabled IS NULL;
+
+-- 3) 建议：给已确认的接口批量初始化（示例，执行前请核对列名）
+UPDATE [dbo].[data_connection] SET [source_id] = 123, [org_id] = 2688431883371515906, [status] = 1, [name] = N'科室岗位系数月度明细表', [code] = N'ads_dept_post_coefficient_m', [master] = NULL, [port] = NULL, [data_base] = NULL, [username] = NULL, [password] = NULL, [data_driven] = NULL, [data_view] = NULL, [sign] = NULL, [access_way] = 2, [creator_id] = 1688431883371515906, [createtime] = '2026-09-20 13:30:07.3210000', [modifier_id] = NULL, [modifytime] = NULL, [deleted] = 0, [table_name] = 'ads_dept_post_coefficient_m', [table_name_clean] = NULL, [value_type] = 3, [pull_status] = NULL, [structural_name] = NULL, [pull_time] = NULL, [description] = '新版本 每月都需要维护', [sticky] = '1', [add_pk] = '0', [end_date] = NULL, [is_scheduled] = 0, [cron_expression] = NULL, [date_offset_type] = NULL, [date_offset_value] = NULL, [last_window_start] = NULL, [last_window_end] = NULL, [last_success_time] = NULL, [scope_enabled] = 1, [scope_unit_column] = 'unit_code', [scope_staff_column] = NULL WHERE [id] = 2101544412156755970;
+UPDATE [dbo].[data_connection] SET [source_id] = 123, [org_id] = 2688431883371515906, [status] = 1, [name] = N'线下工作量明细事实表', [code] = N'dwd_fin_charge_workload_detail', [master] = NULL, [port] = NULL, [data_base] = NULL, [username] = NULL, [password] = NULL, [data_driven] = NULL, [data_view] = NULL, [sign] = NULL, [access_way] = 2, [creator_id] = 1688431883371515906, [createtime] = '2026-10-13 17:14:33.0000000', [modifier_id] = NULL, [modifytime] = NULL, [deleted] = 0, [table_name] = 'dwd_fin_charge_workload_detail', [table_name_clean] = NULL, [value_type] = 3, [pull_status] = NULL, [structural_name] = NULL, [pull_time] = NULL, [description] = '新版本', [sticky] = '1', [add_pk] = '0', [end_date] = NULL, [is_scheduled] = 0, [cron_expression] = NULL, [date_offset_type] = NULL, [date_offset_value] = NULL, [last_window_start] = NULL, [last_window_end] = NULL, [last_success_time] = NULL, [scope_enabled] = 1, [scope_unit_column] = 'unit_code', [scope_staff_column] = NULL WHERE [id] = 2109935812166496257;
+UPDATE [dbo].[data_connection] SET [source_id] = 123, [org_id] = 2688431883371515906, [status] = 1, [name] = N'综合奖惩明细事实表', [code] = N'dwd_fin_reward_punish_detail', [master] = NULL, [port] = NULL, [data_base] = NULL, [username] = NULL, [password] = NULL, [data_driven] = NULL, [data_view] = NULL, [sign] = NULL, [access_way] = 2, [creator_id] = 1968504173607608321, [createtime] = '2026-10-28 19:25:46.4590000', [modifier_id] = NULL, [modifytime] = NULL, [deleted] = 0, [table_name] = 'dwd_fin_reward_punish_detail', [table_name_clean] = NULL, [value_type] = 1, [pull_status] = NULL, [structural_name] = NULL, [pull_time] = NULL, [description] = NULL, [sticky] = '1', [add_pk] = '1', [end_date] = NULL, [is_scheduled] = 0, [cron_expression] = NULL, [date_offset_type] = NULL, [date_offset_value] = NULL, [last_window_start] = NULL, [last_window_end] = NULL, [last_success_time] = NULL, [scope_enabled] = 1, [scope_unit_column] = 'unit_code', [scope_staff_column] = NULL WHERE [id] = 2115404654015782913;
+
+
+SET NOCOUNT ON;
+IF OBJECT_ID(N'dbo.data_connection_acl', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.data_connection_acl (
+    id bigint IDENTITY (1, 1) NOT NULL CONSTRAINT pk_data_connection_acl PRIMARY KEY,
+    -- 主体：角色
+    role_id bigint NOT NULL,
+    role_code VARCHAR (50) NOT NULL, -- 冗余快照
+    role_name nvarchar (100) NULL, -- 冗余快照
+    -- 资源：数据接口
+    connection_id bigint NOT NULL,
+    connection_code VARCHAR (100) NOT NULL, -- 冗余快照
+    connection_name nvarchar (200) NULL, -- 冗余快照
+    -- 预留：可见之外是否允许导出（先不启用）
+    can_export tinyint NOT NULL CONSTRAINT df_dca_can_export DEFAULT 0,
+    create_user bigint NULL,
+    create_time datetime2 NULL,
+    CONSTRAINT uk_dca_role_conn UNIQUE (role_id, connection_id)
+  );
+  CREATE INDEX ix_dca_role ON dbo.data_connection_acl (role_id);
+  CREATE INDEX ix_dca_conn ON dbo.data_connection_acl (connection_id);
+  PRINT N'[新建] dbo.data_connection_acl';
+END
+ELSE
+  PRINT N'[已存在] dbo.data_connection_acl，跳过建表';
