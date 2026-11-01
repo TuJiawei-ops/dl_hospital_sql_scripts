@@ -21,6 +21,7 @@
   快照: [奖惩明细快照] = 当前汇总键对应的原始基表明细数组（JSON_QUERY + FOR JSON PATH，按明细ID升序）。
 
   修改日志:
+  2026-11-01 21:21:00 | 快照补列 | src 增补 [origin_type]/[origin_name]/[origin_ref_no] 三列，[奖惩明细快照] 同步输出 [发起方类型]/[发起方名称]/[发起方依据编号]；聚合计价、落库列与第二区块零改动。
   2026-10-12 23:55:00 | 结构对齐 | 标头精简为业务契约（撤销纠偏条款）；CALC_DETAIL_JSON 升级为「主体 + 快照」双层结构，主体携带汇总因子与计算过程描述，嵌套 [奖惩明细快照]（同键原始基表明细数组，JSON_QUERY + FOR JSON PATH）；src 增补 [unit_price]/[create_user]；三层聚合与 CROSS APPLY TOP (1) 直取口径零改动。
   2026-10-12 23:40:00 | 极简瘦身 | 属性代表值降维为 final 内 CROSS APPLY TOP (1) 确定性直取，CTE 链收敛为 src → agg → final 三层。
   2026-10-12 23:00:00 | 极简瘦身 | JSON 改为单行轻量对象；src 精简至 18 列；agg 增事实级日期区间。
@@ -61,6 +62,9 @@ src AS (
         CAST(r.[unit_price] AS DECIMAL(18,8))              AS UNIT_PRICE,
         CAST(r.[quantity]   AS DECIMAL(18,8))              AS QUANTITY,
         CAST(r.[amount]     AS DECIMAL(18,8))              AS AMOUNT,
+        r.[origin_type]                                    AS ORIGIN_TYPE,
+        r.[origin_name]                                    AS ORIGIN_NAME,
+        r.[origin_ref_no]                                  AS ORIGIN_REF_NO,
         r.[remark]                                         AS REMARK,
         r.[create_user]                                    AS CREATE_USER,
         r.[create_time]                                    AS CREATE_TIME,
@@ -212,6 +216,9 @@ SELECT
                     s.[UNIT_PRICE]                             AS [标准值],
                     s.[QUANTITY]                               AS [数量],
                     s.[AMOUNT]                                 AS [奖惩金额],
+                    s.[ORIGIN_TYPE]                            AS [发起方类型],
+                    s.[ORIGIN_NAME]                            AS [发起方名称],
+                    s.[ORIGIN_REF_NO]                          AS [发起方依据编号],
                     s.[REMARK]                                 AS [事由备注],
                     s.[CREATE_USER]                            AS [创建人],
                     CONVERT(VARCHAR(19), s.[CREATE_TIME], 120)  AS [创建时间],
