@@ -1,4 +1,4 @@
-﻿/* ===============================================================================
+/* ===============================================================================
   Relative Path : 一次分配/医疗服务项目开单积分.sql
   脚本名称: 医疗服务项目开单积分.sql
   业务说明: 医疗服务项目开单决策积分汇总（按 核算单元 × 项目 粒度）
@@ -44,6 +44,7 @@
      joined 的单元级 [RVU_VAL]，否则动态路由被静默压平为项目级常态。
 
   修改日志：
+  2026-11-01 20:48:00 | 接口读取 | CTE_DWD_READ_ALIAS 补投影 [TOTAL_QTY] AS [汇总数量]（置于 [FINAL_VALUE] 之后），与医疗服务项目执行积分.sql 读取块对齐；第一区块落库、外层 struct_code/struct_name/result_value 契约与 GROUP BY 零改动。
   2026-10-05 00:00:00 | 职系动态路由 | 开单 RVU 由项目级单值升级为按核算单元职系动态路由：新增 dept_series_rank/dept_series 两层 CTE（UNIT_CODE=T_DEPARTMENT.[CODE]，按 DELETE_FLAG ASC → ID DESC 取 RN=1 保 1:1，严禁裸过滤行扩散）；dim_version_scope 增补 CLINIC_ORDER_RVU_VAL / TECH_ORDER_RVU_VAL / NURSE_ORDER_RVU_VAL 三列投影（DECIMAL(18,8) 对齐全局精度）；joined 增 LEFT JOIN dept_series 并以 CASE 路由 1001/1011/1036 三职系、其余兜底 RVU_VAL；根治 agg_coff_collapse 将 RVU_VAL 以 MAX() 折叠为项目级单值导致路由失效的隐患，移除其 RVU_VAL/DECISION_COFF 折叠列并改由 agg 直取 joined 单元级 [RVU_VAL]，agg GROUP BY / 投影源同步切换为 j.[RVU_VAL]；落库列、JSON 过程仓 14 节点、双区块 Envelope 与全部占位符零改动。
   2026-09-30 00:00:00 | 时间维度变更 | 依据2026-09-30需求变更，取消按来源分流，门诊与非门诊统一下沉至 a.[缴费时间] 闭区间筛选。
   2026-09-28 12:00:00 | 人员类别扩展 | dept_unit_mapping CTE 中 PERFORM_PERSON_TYPE_CODE 过滤条件由等于 '1001' 扩展为 IN ('1001', '1021', '1005')，确保收款室、方便门诊等行后与其它序列科室映射关系正常生效。
@@ -401,6 +402,7 @@ WITH CTE_DWD_READ_ALIAS AS (
         [ITEM_CAT_NAME]         AS [绩效核算大类名称],
         [FINAL_VALUE_TYPE]      AS [值类型],
         [FINAL_VALUE]           AS [最终结果],
+        [TOTAL_QTY]             AS [汇总数量],
         [CALC_PROCESS_TEXT]     AS [计算过程描述],
         [CALC_DETAIL_JSON]      AS [明细JSON],
         CONVERT(VARCHAR(19), [CREATE_TIME], 120) AS [创建时间]
