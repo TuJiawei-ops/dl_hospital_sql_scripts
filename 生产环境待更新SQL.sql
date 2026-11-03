@@ -115,3 +115,16 @@ BEGIN
 END
 ELSE
   PRINT N'[已存在] dbo.data_connection_acl，跳过建表';
+
+
+    ALTER TABLE dbo.T_USER_INFO ADD PWD_UPDATE_TIME datetime2(7) NULL;
+    PRINT N'[新增] T_USER_INFO.PWD_UPDATE_TIME';
+
+
+
+
+ALTER TABLE data_import ADD
+    ui_type        varchar(20)  NOT NULL
+                   CONSTRAINT df_data_import_ui_type DEFAULT 'text',
+    ui_source      varchar(64)  NULL,   -- 字典: sys_dict_type.code；资源: staff/department/position
+    ui_pair_field  varchar(128) NULL;   -- 同表名称列，选中后自动写入
