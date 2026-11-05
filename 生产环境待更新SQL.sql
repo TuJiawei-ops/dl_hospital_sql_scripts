@@ -128,3 +128,84 @@ ALTER TABLE data_import ADD
                    CONSTRAINT df_data_import_ui_type DEFAULT 'text',
     ui_source      varchar(64)  NULL,   -- 字典: sys_dict_type.code；资源: staff/department/position
     ui_pair_field  varchar(128) NULL;   -- 同表名称列，选中后自动写入
+
+
+ALTER TABLE data_import ADD
+    ui_required BIT NOT NULL CONSTRAINT df_data_import_ui_required DEFAULT 0,
+    ui_readonly BIT NOT NULL CONSTRAINT df_data_import_ui_readonly DEFAULT 0;
+
+
+
+-- =============================================================================
+-- 日志审计：登录日志 + 操作日志
+-- -----------------------------------------------------------------------------
+-- 设计原则：
+--   1) 只追加，不提供删除/修改接口（合规要求：审计日志不可篡改）；
+--   2) 敏感信息不入库（密码、身份证、银行卡一律不记录）；
+--   3) 按时间建索引，配合保留策略（默认保留 6 个月，可配置）。
+-- =============================================================================
+
+SET NOCOUNT ON;
+
+/* ---------------- 1. 登录日志 ---------------- */
+IF OBJECT_ID(N'dbo.sys_login_log', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.sys_login_log (
+        id            BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT pk_sys_login_log PRIMARY KEY,
+        account_no    NVARCHAR(64)  NULL,          -- 登录账号（失败时也记录，便于排查撞库）
+        user_name     NVARCHAR(64)  NULL,          -- 姓名（成功时回填）
+        user_id       DECIMAL(19,0) NULL,          -- 账号ID（成功时回填）
+        result        VARCHAR(10)   NOT NULL,      -- SUCCESS / FAIL
+        fail_reason   NVARCHAR(200) NULL,          -- 失败原因（如密码错误、账号停用）
+        client_ip     VARCHAR(64)   NULL,
+        user_agent    NVARCHAR(500) NULL,
+        login_time    DATETIME      NOT NULL CONSTRAINT df_sys_login_log_time DEFAULT GETDATE()
+    );
+    CREATE NONCLUSTERED INDEX ix_sys_login_log_time ON dbo.sys_login_log (login_time DESC);
+    CREATE NONCLUSTERED INDEX ix_sys_login_log_account ON dbo.sys_login_log (account_no, login_time DESC);
+    PRINT N'[新增] sys_login_log';
+END
+ELSE PRINT N'[已存在] sys_login_log';
+
+/* ---------------- 2. 操作日志 ---------------- */
+IF OBJECT_ID(N'dbo.sys_operation_log', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.sys_operation_log (
+        id            BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT pk_sys_operation_log PRIMARY KEY,
+        module        NVARCHAR(64)  NOT NULL,      -- 模块（如 员工管理 / 数据接口）
+        action        NVARCHAR(32)  NOT NULL,      -- 动作（CREATE/UPDATE/DELETE/IMPORT/EXPORT/APPROVE）
+        target_type   NVARCHAR(64)  NULL,          -- 对象类型（表名或业务名）
+        target_id     NVARCHAR(128) NULL,          -- 对象主键（可为空）
+        summary       NVARCHAR(500) NULL,          -- 摘要（人可读）
+        detail        NVARCHAR(MAX) NULL,          -- 变更前后（JSON，敏感字段已脱敏）
+        result        VARCHAR(10)   NOT NULL,      -- SUCCESS / FAIL
+        fail_reason   NVARCHAR(500) NULL,
+        operator_id   DECIMAL(19,0) NULL,
+        operator_no   NVARCHAR(64)  NULL,
+        operator_name NVARCHAR(64)  NULL,
+        client_ip     VARCHAR(64)   NULL,
+        cost_ms       INT           NULL,
+        operate_time  DATETIME      NOT NULL CONSTRAINT df_sys_operation_log_time DEFAULT GETDATE()
+    );
+    CREATE NONCLUSTERED INDEX ix_sys_operation_log_time ON dbo.sys_operation_log (operate_time DESC);
+    CREATE NONCLUSTERED INDEX ix_sys_operation_log_module ON dbo.sys_operation_log (module, operate_time DESC);
+    CREATE NONCLUSTERED INDEX ix_sys_operation_log_operator ON dbo.sys_operation_log (operator_no, operate_time DESC);
+    PRINT N'[新增] sys_operation_log';
+END
+ELSE PRINT N'[已存在] sys_operation_log';
+
+/* ---------------- 3. 菜单（示例：按现有 T_RESOURCE_INFO 结构插入后人工调整） ---------------- */
+-- 说明：菜单/权限请按你们现有资源表结构与前端路由 name 配置，避免脚本硬编码 ID 造成冲突。
+-- 需要插入两条 MENU_TYPE=1 的资源：登录日志 logAuditLogin、操作日志 logAuditOperation，
+-- 母菜单建议挂在「基础设置」下（parent_id 取基础设置节点 ID）。
+
+/* ---------------- 4. 保留策略（可选，按月清理） ---------------- */
+-- DELETE FROM sys_login_log WHERE login_time < DATEADD(MONTH, -6, GETDATE());
+-- DELETE FROM sys_operation_log WHERE operate_time < DATEADD(MONTH, -6, GETDATE());
+
+
+
+INSERT INTO [dbo].[T_RESOURCE_INFO] ([ID], [SYSTEM_ID], [FUN_NODE], [LABEL], [COMPONENT_NAME], [NAME], [PARENT_ID], [PATH], [SERVER_URL], [SORT_NUMBER], [COMPONENT], [MENU_TYPE], [EQUIPMENT_TYPE], [IS_KEEP_ALIVE], [IS_HIDE], [ICON], [PERMS], [STATUS], [CREATE_USER], [CREATE_TIME], [MODIFY_USER], [MODIFY_TIME], [DELETE_FLAG], [BTN_CODE], [micro_name], [PARENT_NAME]) VALUES (2117862847233536002, NULL, NULL, NULL, NULL, N'查看', 2116382088786026498, NULL, NULL, NULL, NULL, 2, 1, NULL, 0, NULL, NULL, 1, 1968504173607608321, '2026-11-04 14:13:45.4310000', 1968504173607608321, '2026-11-04 14:13:45.4310000', 0, 'logAuditLogin:list', NULL, '登录日志');
+INSERT INTO [dbo].[T_RESOURCE_INFO] ([ID], [SYSTEM_ID], [FUN_NODE], [LABEL], [COMPONENT_NAME], [NAME], [PARENT_ID], [PATH], [SERVER_URL], [SORT_NUMBER], [COMPONENT], [MENU_TYPE], [EQUIPMENT_TYPE], [IS_KEEP_ALIVE], [IS_HIDE], [ICON], [PERMS], [STATUS], [CREATE_USER], [CREATE_TIME], [MODIFY_USER], [MODIFY_TIME], [DELETE_FLAG], [BTN_CODE], [micro_name], [PARENT_NAME]) VALUES (2117862789469581314, NULL, NULL, NULL, NULL, N'查看', 2116382088786026499, NULL, NULL, NULL, NULL, 2, 1, NULL, 0, NULL, NULL, 1, 1968504173607608321, '2026-11-04 14:13:31.6460000', 1968504173607608321, '2026-11-04 14:13:31.6460000', 0, 'logAuditOperation:list', NULL, '操作日志');
+INSERT INTO [dbo].[T_RESOURCE_INFO] ([ID], [SYSTEM_ID], [FUN_NODE], [LABEL], [COMPONENT_NAME], [NAME], [PARENT_ID], [PATH], [SERVER_URL], [SORT_NUMBER], [COMPONENT], [MENU_TYPE], [EQUIPMENT_TYPE], [IS_KEEP_ALIVE], [IS_HIDE], [ICON], [PERMS], [STATUS], [CREATE_USER], [CREATE_TIME], [MODIFY_USER], [MODIFY_TIME], [DELETE_FLAG], [BTN_CODE], [micro_name], [PARENT_NAME]) VALUES (2116382088786026499, NULL, NULL, NULL, NULL, N'操作日志', 1915645779515166721, N'/logAuditOperation/index', NULL, 41, N'logAuditOperation', 1, 1, NULL, 0, NULL, NULL, 1, 1688431883371515906, '2026-11-04 14:12:02.1730000', 1688431883371515906, '2026-11-04 14:12:02.1730000', 0, NULL, NULL, '基础设置');
+INSERT INTO [dbo].[T_RESOURCE_INFO] ([ID], [SYSTEM_ID], [FUN_NODE], [LABEL], [COMPONENT_NAME], [NAME], [PARENT_ID], [PATH], [SERVER_URL], [SORT_NUMBER], [COMPONENT], [MENU_TYPE], [EQUIPMENT_TYPE], [IS_KEEP_ALIVE], [IS_HIDE], [ICON], [PERMS], [STATUS], [CREATE_USER], [CREATE_TIME], [MODIFY_USER], [MODIFY_TIME], [DELETE_FLAG], [BTN_CODE], [micro_name], [PARENT_NAME]) VALUES (2116382088786026498, NULL, NULL, NULL, NULL, N'登录日志', 1915645779515166721, N'/logAuditLogin/index', NULL, 40, N'logAuditLogin', 1, 1, NULL, 0, NULL, NULL, 1, 1688431883371515906, '2026-11-04 14:12:02.1700000', 1688431883371515906, '2026-11-04 14:12:02.1700000', 0, NULL, NULL, '基础设置');
