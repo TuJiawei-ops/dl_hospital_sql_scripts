@@ -1,5 +1,11 @@
 # 大连项目系统信息
 
+宏邀请您进行远程控制
+ToDesk设备代码：476 405 264
+临时密码:pc1ptpi7
+点击链接直接进行远程控制：
+https://wechat.todesk.com/invite-page?id=trMhQC8fkEOztUJIm4WbR
+
 ## 1. 远程连接 (VPN)
 - 客户端：Vone客户端
 - IP地址：59.46.150.26--4430
@@ -11,7 +17,7 @@
 - 堡垒机账号：xxk
 - 堡垒机密码：xxk@9999 Xxk@8888
 - 备用堡垒机账号：HRP
-- 备用堡垒机密码：hrp@12345 / Hrp@12345
+- 备用堡垒机密码：1qaz!QAZ
 
 ## 3. 手机令牌 (步骤二)
 - APP名称：手机令牌
