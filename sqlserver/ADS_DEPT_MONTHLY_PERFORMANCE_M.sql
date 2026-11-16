@@ -46,7 +46,7 @@ CREATE TABLE [dbo].[ads_dept_monthly_performance_m] (
     [distributed_amount]                DECIMAL(18, 2)  NOT NULL DEFAULT 0.00,  -- 已分配给个人的合计
 
     -- 4. 辅助度量
-    [staff_count]                       INT             NOT NULL DEFAULT 0,     -- 参与分配人数
+    [staff_count]                       DECIMAL(18, 2)  NOT NULL DEFAULT 0.00,  -- 参与分配人数（支持小数，如 0.5 人折算）
 
     -- 5. 审计与备注
     [remark]                            VARCHAR(1000)   NULL,                        -- 备注
