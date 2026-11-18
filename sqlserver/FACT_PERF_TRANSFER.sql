@@ -6,7 +6,7 @@
 -- 设计说明
 --   1. 方向：
 --        OUT = 科室 → 池（划转/提取，如护理组 50% 上交护理部）
---        IN  = 池 → 科室（再分配，护理部把额度分回科室）
+--        IN  = 池 → 核算单元（再分配，护理部把额度分回科室单元）
 --   2. 金额由业务手工填写（不内置比例规则），"想填多少填多少"，规则化留待后续。
 --   3. 最终结果不落新表：
 --        最终 = 基础结果(DWD_FIN_CALC_ALLOC1_DETAIL_LOG) − ΣOUT + ΣIN
@@ -28,8 +28,8 @@ CREATE TABLE [dbo].[fact_perf_transfer] (
     [calc_month]    INT             NOT NULL,                  -- 核算月份
     [pool_code]     VARCHAR(50)     NOT NULL,                  -- 统筹池编码（dim_perf_pool）
     [direction]     VARCHAR(4)      NOT NULL,                  -- OUT=科室→池 / IN=池→科室
-    [unit_code]     VARCHAR(50)     NOT NULL,                  -- 对方科室编码（OUT=来源，IN=目标）
-    [unit_name]     VARCHAR(100)    NULL,                      -- 科室名称（冗余）
+    [unit_code]     VARCHAR(50)     NOT NULL,                  -- 对方核算单元编码（OUT=来源单元，IN=目标单元）
+    [unit_name]     VARCHAR(100)    NULL,                      -- 核算单元名称（冗余）
     [amount]        DECIMAL(18,2)   NOT NULL,                  -- 金额（手工填写）
     [remark]        VARCHAR(500)    NULL,                      -- 原因/说明
     [status]        INT             NOT NULL DEFAULT 0,        -- 0草稿 1已提交
@@ -82,13 +82,13 @@ EXEC sys.sp_addextendedproperty
     @level2type = N'COLUMN', @level2name = N'direction';
 
 EXEC sys.sp_addextendedproperty
-    @name = N'MS_Description', @value = N'科室编码（OUT=来源科室，IN=目标科室）',
+    @name = N'MS_Description', @value = N'核算单元编码（OUT=来源单元，IN=目标单元）',
     @level0type = N'SCHEMA', @level0name = N'dbo',
     @level1type = N'TABLE',  @level1name = N'fact_perf_transfer',
     @level2type = N'COLUMN', @level2name = N'unit_code';
 
 EXEC sys.sp_addextendedproperty
-    @name = N'MS_Description', @value = N'科室名称（冗余字段）',
+    @name = N'MS_Description', @value = N'核算单元名称（冗余字段）',
     @level0type = N'SCHEMA', @level0name = N'dbo',
     @level1type = N'TABLE',  @level1name = N'fact_perf_transfer',
     @level2type = N'COLUMN', @level2name = N'unit_name';
